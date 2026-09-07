@@ -1,0 +1,72 @@
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { useAuth, roleHome } from './store.jsx'
+import AuthPage from './pages/AuthPage.jsx'
+import Layout from './components/Layout.jsx'
+
+import ApplicantHome from './pages/applicant/ApplicantHome.jsx'
+import Browse from './pages/applicant/Browse.jsx'
+import PostingDetail from './pages/applicant/PostingDetail.jsx'
+import MyApplications from './pages/applicant/MyApplications.jsx'
+import ApplicationDetail from './pages/applicant/ApplicationDetail.jsx'
+import ResumeBuilder from './pages/applicant/ResumeBuilder.jsx'
+import ProfilePage from './pages/ProfilePage.jsx'
+
+import CompanyHome from './pages/company/CompanyHome.jsx'
+import PostingForm from './pages/company/PostingForm.jsx'
+import CompanyPostingDetail from './pages/company/CompanyPostingDetail.jsx'
+import CompanyApplicationDetail from './pages/company/CompanyApplicationDetail.jsx'
+import CompanyApplications from './pages/company/CompanyApplications.jsx'
+
+import SchoolHome from './pages/school/SchoolHome.jsx'
+import StudentDetail from './pages/school/StudentDetail.jsx'
+
+function Guard({ role, children }) {
+  const { user, ready } = useAuth()
+  if (!ready) return <div className="page-loading">Loading…</div>
+  if (!user) return <Navigate to="/login" replace />
+  if (role && user.role !== role) return <Navigate to={roleHome(user.role)} replace />
+  return children
+}
+
+function HomeRedirect() {
+  const { user, ready } = useAuth()
+  if (!ready) return <div className="page-loading">Loading…</div>
+  return <Navigate to={user ? roleHome(user.role) : '/login'} replace />
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<HomeRedirect />} />
+      <Route path="/login" element={<AuthPage />} />
+
+      <Route path="/app" element={<Guard role="applicant"><Layout /></Guard>}>
+        <Route index element={<ApplicantHome />} />
+        <Route path="browse" element={<Browse />} />
+        <Route path="postings/:id" element={<PostingDetail />} />
+        <Route path="applications" element={<MyApplications />} />
+        <Route path="applications/:id" element={<ApplicationDetail />} />
+        <Route path="resume" element={<ResumeBuilder />} />
+        <Route path="profile" element={<ProfilePage />} />
+      </Route>
+
+      <Route path="/company" element={<Guard role="company"><Layout /></Guard>}>
+        <Route index element={<CompanyHome />} />
+        <Route path="postings/new" element={<PostingForm />} />
+        <Route path="postings/:id" element={<CompanyPostingDetail />} />
+        <Route path="postings/:id/edit" element={<PostingForm />} />
+        <Route path="applications" element={<CompanyApplications />} />
+        <Route path="applications/:id" element={<CompanyApplicationDetail />} />
+        <Route path="profile" element={<ProfilePage />} />
+      </Route>
+
+      <Route path="/school" element={<Guard role="school"><Layout /></Guard>}>
+        <Route index element={<SchoolHome />} />
+        <Route path="students/:id" element={<StudentDetail />} />
+        <Route path="profile" element={<ProfilePage />} />
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
