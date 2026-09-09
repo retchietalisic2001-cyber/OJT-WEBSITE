@@ -4,8 +4,11 @@ import { getSocket } from '../socket.js'
 import { useAuth } from '../store.jsx'
 import { toast } from '../toast.jsx'
 
-export default function ChatBox({ applicationId }) {
+export default function ChatBox({ thread, applicationId, title }) {
   const { token, user } = useAuth()
+  const isSchool = (thread?.type === 'school')
+  const studentId = isSchool ? thread.studentId : null
+  const appId = isSchool ? null : (thread?.applicationId || applicationId)
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [text, setText] = useState('')
@@ -16,18 +19,23 @@ export default function ChatBox({ applicationId }) {
   const bodyRef = useRef(null)
   const typingTimer = useRef(null)
 
+  const base = isSchool ? `/chat/school/${studentId}` : `/messages/${appId}`
+
   useEffect(() => {
     let alive = true
-    api(`/messages/${applicationId}`, { token })
-      .then((rows) => {
-        if (alive) setMessages(rows)
+    setLoading(true)
+    setMessages([])
+    api(base, { token })
+      .then((data) => {
+        if (!alive) return
+        setMessages(isSchool ? (data.messages || []) : data)
       })
       .catch((e) => toast.error(e.message))
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
-  }, [applicationId, token])
+  }, [base, token, isSchool])
 
   useEffect(() => {
     if (loading) return
@@ -36,7 +44,8 @@ export default function ChatBox({ applicationId }) {
 
   useEffect(() => {
     const socket = getSocket(token)
-    socket.emit('join', applicationId)
+    if (isSchool) socket.emit('join', { type: 'school', studentId })
+    else socket.emit('join', appId)
 
     const onNew = (m) => {
       setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]))
@@ -50,7 +59,8 @@ export default function ChatBox({ applicationId }) {
       socket.off('message:new', onNew)
       socket.off('join-error', onJoinErr)
     }
-  }, [applicationId, token])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSchool, studentId, appId, token])
 
   const send = async () => {
     const content = text.trim()
@@ -60,7 +70,8 @@ export default function ChatBox({ applicationId }) {
     setMessages((prev) => [...prev, temp])
     setText('')
     try {
-      await api(`/messages/${applicationId}`, { method: 'POST', token, body: { content } })
+      await api(base, { method: 'POST', token, body: { content } })
+      setMessages((prev) => prev.filter((m) => m.id !== temp.id))
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== temp.id))
       toast.error(e.message)
@@ -88,7 +99,8 @@ export default function ChatBox({ applicationId }) {
     }
     setMessages((prev) => [...prev, temp])
     try {
-      await api(`/messages/${applicationId}/upload`, { method: 'POST', token, form: fd })
+      await api(`${base}/upload`, { method: 'POST', token, form: fd })
+      setMessages((prev) => prev.filter((m) => m.id !== temp.id))
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== temp.id))
       toast.error(err.message)
@@ -101,26 +113,26 @@ export default function ChatBox({ applicationId }) {
     if (typingTimer.current) clearTimeout(typingTimer.current)
     typingTimer.current = setTimeout(() => {
       const socket = getSocket(token)
-      socket.emit('typing', { applicationId, sender: user.name })
+      if (isSchool) socket.emit('typing', { type: 'school', studentId, sender: user.name })
+      else socket.emit('typing', { applicationId: appId, sender: user.name })
     }, 200)
   }
 
   useEffect(() => {
     const socket = getSocket(token)
-    const onTyping = ({ applicationId: id, sender }) => {
-      if (id !== applicationId || sender === user.name) return
-      setTypingLabel(`${sender} is typing…`)
+    const onTyping = (p) => {
+      const match = isSchool ? (p?.type === 'school' && Number(p.studentId) === Number(studentId)) : (p?.applicationId && Number(p.applicationId) === Number(appId))
+      if (!match || p?.sender === user.name) return
+      setTypingLabel(`${p.sender} is typing…`)
       clearTimeout(typingTimer.current)
       typingTimer.current = setTimeout(() => setTypingLabel(null), 2500)
     }
-    const onJoined = () => {}
     socket.on('typing', onTyping)
-    socket.on('joined', onJoined)
     return () => {
       socket.off('typing', onTyping)
-      socket.off('joined', onJoined)
     }
-  }, [applicationId, token, user.name])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSchool, studentId, appId, token, user.name])
 
   return (
     <div className="chatbox">
@@ -128,7 +140,8 @@ export default function ChatBox({ applicationId }) {
         {loading && <div className="chat-hint">Loading messages…</div>}
         {!loading && messages.length === 0 && (
           <div className="chat-hint">
-            No messages yet. Start the conversation — you can send documents or photos here so no one has to visit the office just to submit requirements.
+            {title ? `No messages yet with ${title}. ` : 'No messages yet. '}
+            Send documents or photos here so no one has to visit the office just to submit requirements.
           </div>
         )}
         {messages.map((m) => (

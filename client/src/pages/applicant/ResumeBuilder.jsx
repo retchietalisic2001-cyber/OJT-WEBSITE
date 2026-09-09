@@ -6,6 +6,22 @@ import { Spinner, emptyState } from '../../components/ui.jsx'
 import { toast } from '../../toast.jsx'
 
 const EMPTY = { summary: '', skills: [], education: [], experience: [], projects: [], certifications: [] }
+const DRAFT_KEY = 'ojt_resume_draft'
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function saveDraft(data) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(data)) } catch {}
+}
+
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY) } catch {}
+}
 
 function AddRowForm({ fields, setFields, field, placeholders, buttonLabel }) {
   const [draft, setDraft] = useState(() => Object.fromEntries(placeholders.map((p) => [p.key, ''])))
@@ -62,12 +78,31 @@ export default function ResumeBuilder() {
   const [skills, setSkills] = useState([])
   const [customSkill, setCustomSkill] = useState('')
   const [saving, setSaving] = useState(false)
+  const [draftRestored, setDraftRestored] = useState(false)
 
   useEffect(() => {
     api('/resume/my', { token }).then((r) => {
-      setResume(r)
-      setSkills(r.data.skills || [])
-    }).catch(() => setResume({ data: EMPTY }))
+      const draft = loadDraft()
+      if (draft && r.data === EMPTY && (draft.summary || draft.skills?.length || draft.education?.length || draft.experience?.length)) {
+        setResume({ ...r, data: { ...EMPTY, ...draft } })
+        setSkills(draft.skills || [])
+        setDraftRestored(true)
+        toast.success('Draft restored from previous session')
+      } else {
+        setResume(r)
+        setSkills(r.data.skills || [])
+      }
+    }).catch(() => {
+      const draft = loadDraft()
+      if (draft) {
+        setResume({ data: { ...EMPTY, ...draft } })
+        setSkills(draft.skills || [])
+        setDraftRestored(true)
+        toast.success('Draft restored from previous session')
+      } else {
+        setResume({ data: EMPTY })
+      }
+    })
   }, [token])
 
   useEffect(() => {
@@ -84,6 +119,11 @@ export default function ResumeBuilder() {
       })
     }).catch(() => {})
   }, [token, user?.profile?.course])
+
+  useEffect(() => {
+    if (!resume) return
+    saveDraft(resume.data)
+  }, [resume])
 
   if (!resume) return <Spinner />
 
@@ -119,6 +159,8 @@ export default function ResumeBuilder() {
     setSaving(true)
     try {
       await api('/resume/my', { method: 'PUT', token, body: { data: resume.data } })
+      clearDraft()
+      setDraftRestored(false)
       toast.success('Resume saved')
     } catch (e) {
       toast.error(e.message)
@@ -139,6 +181,11 @@ export default function ResumeBuilder() {
           <p className="muted">Smart suggestions are auto-filled for {user?.profile?.course || 'your course'}. Build once, attach to any application's chat.</p>
         </div>
         <div className="head-actions">
+          {draftRestored && (
+            <span className="muted small" style={{ marginRight: 8, color: '#F0A03C' }}>
+              Draft restored — save to keep it
+            </span>
+          )}
           <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save resume'}</button>
           <button className="btn btn-ghost" onClick={() => window.print()}>🖨️ Print / PDF</button>
         </div>

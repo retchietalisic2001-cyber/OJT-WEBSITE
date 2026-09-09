@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { toast } from '../../toast.jsx'
 import { Spinner, Modal } from '../../components/ui.jsx'
+import FileViewer from '../../components/FileViewer.jsx'
 import { useAuth } from '../../store.jsx'
 import { useConfirm } from '../../confirm.jsx'
 
@@ -26,6 +27,7 @@ function verifyFmtSize(bytes) {
 function VerifyRow({ v, onReview, onDelete }) {
   const st = VERIFY_STATUS[v.status] || VERIFY_STATUS.pending
   const org = v.org_name || v.email
+  const [view, setView] = useState(false)
   return (
     <div className="admin-row">
       <div className="admin-row-main">
@@ -35,7 +37,7 @@ function VerifyRow({ v, onReview, onDelete }) {
       </div>
       <div className="admin-row-meta">
         <span className={'req-badge ' + st.cls}>{st.label}</span>
-        <a className="btn btn-sm btn-ghost" href={v.file_path} target="_blank" rel="noreferrer">View</a>
+        <button className="btn btn-sm btn-ghost" onClick={() => setView(true)}>View 🔍</button>
         {v.status === 'pending' && (
           <>
             <button className="btn btn-sm btn-primary" onClick={() => onReview(v, 'approved')}>Approve</button>
@@ -44,6 +46,7 @@ function VerifyRow({ v, onReview, onDelete }) {
         )}
         <button className="btn btn-sm btn-danger" onClick={() => onDelete(v.id)}>Delete</button>
       </div>
+      {view && <FileViewer files={[v]} onClose={() => setView(false)} />}
     </div>
   )
 }
@@ -333,10 +336,12 @@ function RequestCard({ r, onStatus, onApprove, onDecline, onDelete }) {
   const meta = REQ_META[r.status] || REQ_META.pending
   const fields = REQ_FIELDS[r.kind] || []
   const d = r.details || {}
+  const [view, setView] = useState(false)
   return (
-    <div className="admin-row req-row">
-      <div className="admin-row-main">
-        <div className="req-top">
+    <>
+      <div className="admin-row req-row">
+        <div className="admin-row-main">
+          <div className="req-top">
           <strong>{r.kind === 'company' ? '🏢 Company request' : '🏫 School request'}</strong>
           <span className={'req-badge ' + meta.cls}>{meta.label}</span>
         </div>
@@ -348,13 +353,9 @@ function RequestCard({ r, onStatus, onApprove, onDecline, onDelete }) {
           {r.file_path && (
             <div className="req-field">
               <span>Documents ({r.file2_path ? 2 : 1}):</span>
-              <a className="link-btn" href={r.file_path} target="_blank" rel="noreferrer">{r.file_name} · {verifyFmtSize(r.file_size)}</a>
-              {r.file2_path && (
-                <>
-                  <span className="muted small"> · </span>
-                  <a className="link-btn" href={r.file2_path} target="_blank" rel="noreferrer">{r.file2_name} · {verifyFmtSize(r.file2_size)}</a>
-                </>
-              )}
+              <button className="link-btn" onClick={() => setView(true)}>
+                {r.file_name} · {verifyFmtSize(r.file_size)} {r.file2_path ? ` + ${r.file2_name} · ${verifyFmtSize(r.file2_size)}` : ''}
+              </button>
             </div>
           )}
         </div>
@@ -398,6 +399,16 @@ function RequestCard({ r, onStatus, onApprove, onDecline, onDelete }) {
         }}>Delete</button>
       </div>
     </div>
+    {view && (
+      <FileViewer
+        files={[
+          { ...r, file_path: r.file_path, file_name: r.file_name, file_size: r.file_size },
+          ...(r.file2_path ? [{ ...r, file_path: r.file2_path, file_name: r.file2_name, file_size: r.file2_size }] : [])
+        ]}
+        onClose={() => setView(false)}
+      />
+    )}
+    </>
   )
 }
 

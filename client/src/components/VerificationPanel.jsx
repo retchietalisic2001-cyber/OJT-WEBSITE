@@ -4,6 +4,7 @@ import { useAuth } from '../store.jsx'
 import { useConfirm } from '../confirm.jsx'
 import { toast } from '../toast.jsx'
 import { Spinner } from './ui.jsx'
+import FileViewer from './FileViewer.jsx'
 
 const DOC_OPTIONS = {
   valid_id: '🪪 Valid ID (authorized representative)',
@@ -32,6 +33,7 @@ export default function VerificationPanel({ role }) {
   const [documentType, setDocumentType] = useState('valid_id')
   const [label, setLabel] = useState('')
   const [file, setFile] = useState(null)
+  const [view, setView] = useState(null)
 
   const load = async () => {
     try {
@@ -127,7 +129,7 @@ export default function VerificationPanel({ role }) {
                 </div>
                 <div className="admin-row-meta">
                   <span className={'req-badge ' + st.cls}>{st.label}</span>
-                  <a className="btn btn-sm btn-ghost" href={d.file_path} target="_blank" rel="noreferrer">View</a>
+                  <button className="btn btn-sm btn-ghost" onClick={() => setView(d)}>View 🔍</button>
                   {d.status !== 'approved' && (
                     <button className="btn btn-sm btn-danger" onClick={() => remove(d.id)}>Remove</button>
                   )}
@@ -154,6 +156,7 @@ export default function VerificationPanel({ role }) {
           <button className="btn btn-primary" disabled={busy}>{busy ? 'Uploading…' : 'Upload for review'}</button>
         </div>
       </form>
+      {view && <FileViewer files={[view]} onClose={() => setView(null)} />}
     </div>
   )
 }

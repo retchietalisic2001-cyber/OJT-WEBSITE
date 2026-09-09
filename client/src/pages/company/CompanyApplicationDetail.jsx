@@ -5,6 +5,7 @@ import { useConfirm } from '../../confirm.jsx'
 import { api, fmtDate } from '../../api.js'
 import { Spinner, StatusBadge, StatusStepper, Timeline } from '../../components/ui.jsx'
 import ChatBox from '../../components/ChatBox.jsx'
+import FileViewer from '../../components/FileViewer.jsx'
 import { toast } from '../../toast.jsx'
 
 const QUICK = [
@@ -28,6 +29,7 @@ export default function CompanyApplicationDetail() {
   const [app, setApp] = useState(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [viewingResume, setViewingResume] = useState(false)
 
   useEffect(() => {
     api(`/applications/${id}`, { token }).then(setApp).catch((e) => toast.error(e.message))
@@ -129,7 +131,7 @@ export default function CompanyApplicationDetail() {
             {app.resume_path ? (
               <>
                 <p className="muted small">{app.resume_name || 'Resume'} — attached with the application.</p>
-                <a className="btn btn-primary btn-block" href={app.resume_path} target="_blank" rel="noreferrer">View resume</a>
+                <button className="btn btn-primary btn-block" onClick={() => setViewingResume(true)}>View resume</button>
               </>
             ) : (
               <p className="muted small">The applicant hasn't attached a resume yet. You can ask for one in the chat below.</p>
@@ -160,6 +162,13 @@ export default function CompanyApplicationDetail() {
           </div>
         </div>
       </div>
+
+      {viewingResume && app.resume_path && (
+        <FileViewer
+          files={[{ file_path: app.resume_path, file_name: app.resume_name || 'Resume', file_size: app.resume_size }]}
+          onClose={() => setViewingResume(false)}
+        />
+      )}
     </div>
   )
 }

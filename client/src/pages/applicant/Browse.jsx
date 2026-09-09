@@ -3,7 +3,7 @@ import { useAuth } from '../../store.jsx'
 import { api } from '../../api.js'
 import { Spinner, JobCard, emptyState, StatusBadge } from '../../components/ui.jsx'
 import MapView from '../../components/MapView.jsx'
-import { COURSES, CITIES, CITY_COORDS } from '../../constants.js'
+import { COURSES, CITIES, CITY_COORDS, REGION_CITIES, cityRegion, regionForLocation } from '../../constants.js'
 
 export default function Browse() {
   const { token, user } = useAuth()
@@ -13,7 +13,7 @@ export default function Browse() {
   const [city, setCity] = useState(p.search_city || '')
   const [q, setQ] = useState('')
   const [addr, setAddr] = useState('')
-  const [radius, setRadius] = useState(25)
+  const [radius, setRadius] = useState(p.search_radius != null ? Number(p.search_radius) : 25)
   const [pos, setPos] = useState(
     p.search_lat != null ? { lat: p.search_lat, lng: p.search_lng } : null
   )
@@ -126,6 +126,11 @@ export default function Browse() {
 
   const mapCenter = pos ? [pos.lat, pos.lng] : city && CITY_COORDS[city] ? CITY_COORDS[city] : undefined
 
+  const locatedRegion = pos ? regionForLocation(pos.lat, pos.lng) : null
+  const profileRegion = !locatedRegion && p.search_lat != null ? regionForLocation(p.search_lat, p.search_lng) : null
+  const activeRegion = city ? cityRegion(city) : locatedRegion || profileRegion
+  const cityOptions = activeRegion && REGION_CITIES[activeRegion] ? REGION_CITIES[activeRegion] : CITIES
+
   if (!postings) return <Spinner />
 
   return (
@@ -149,10 +154,10 @@ export default function Browse() {
             </select>
           </label>
           <label className="field">
-            <span className="field-label">City</span>
+            <span className="field-label">City{activeRegion ? ` · ${activeRegion}` : ''}</span>
             <select className="input" value={city} onChange={onPickCity}>
-              <option value="">Anywhere</option>
-              {CITIES.map((c) => (
+              <option value="">Anywhere{activeRegion ? ` in ${activeRegion}` : ''}</option>
+              {cityOptions.map((c) => (
                 <option key={c}>{c}</option>
               ))}
             </select>
@@ -167,27 +172,26 @@ export default function Browse() {
             </span>
             <input type="range" min="1" max="100" value={radius} onChange={(e) => setRadius(+e.target.value)} className="range" />
           </div>
-          <div className="filter-actions">
-            <button className="btn btn-primary" onClick={() => fetchPostings()}>
-              {loading ? 'Searching…' : 'Search'}
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={useMyLocation}>
-              📍 Locate me instantly
-            </button>
-          </div>
         </div>
 
         <form className="addr-row" onSubmit={locateAddress}>
           <input
             className="input"
-            placeholder="Or type an address to locate instantly on the map…"
+            placeholder="Type an address or landmark to locate it on the map…"
             value={addr}
             onChange={(e) => setAddr(e.target.value)}
           />
           <button type="submit" className="btn btn-ghost" disabled={addrBusy}>
             {addrBusy ? 'Locating…' : '🔎 Locate address'}
           </button>
+          <button type="button" className="btn btn-ghost" onClick={useMyLocation}>📍 My location</button>
         </form>
+
+        <div className="filter-actions center">
+          <button className="btn btn-primary btn-lg" onClick={() => fetchPostings()}>
+            {loading ? 'Searching…' : 'Search'}
+          </button>
+        </div>
 
         {geoFail && !pos && <p className="muted warn-text">Location unavailable or address not found — searching from selected city center instead.</p>}
         {mapCenter && (

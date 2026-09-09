@@ -3,9 +3,16 @@ import { useNavigate, Navigate } from 'react-router-dom'
 import { useAuth, roleHome } from '../store.jsx'
 import { api } from '../api.js'
 import { toast } from '../toast.jsx'
-import { COURSES, YEAR_LEVELS } from '../constants.js'
+import { COURSES, YEAR_LEVELS, PH_UNIVERSITIES } from '../constants.js'
 
 const GENDERS = ['Male', 'Female', 'Prefer not to say']
+
+const PH_MOBILE = /^(09\d{9}|\+?639\d{9})$/
+
+function isValidPhMobile(value) {
+  const digits = String(value || '').replace(/[\s\-]/g, '')
+  return PH_MOBILE.test(digits)
+}
 
 const EYE_ON =
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" /><circle cx="12" cy="12" r="3" /></svg>
@@ -17,7 +24,7 @@ export default function AuthPage() {
   const navigate = useNavigate()
   const [mode, setMode] = useState('login')
   const [schools, setSchools] = useState([])
-  const [form, setForm] = useState({ schoolId: '', newSchool: '', schoolMode: 'pick', courseMode: 'pick' })
+  const [form, setForm] = useState({ schoolId: '', schoolSel: '', newSchool: '', schoolMode: 'pick', courseMode: 'pick' })
   const [show, setShow] = useState({})
   const [socialError, setSocialError] = useState(() => new URLSearchParams(window.location.search).get('error') === 'social')
 
@@ -25,15 +32,29 @@ export default function AuthPage() {
     api('/schools').then(setSchools).catch(() => {})
   }, [])
 
+  const schoolOptions = (() => {
+    const seen = new Set(schools.map((s) => s.name.toLowerCase()))
+    return [
+      ...schools.map((s) => ({ value: `db:${s.id}`, label: s.name })),
+      ...PH_UNIVERSITIES.map((n) => ({ value: `new:${n}`, label: n })).filter((o) => !seen.has(o.label.toLowerCase()))
+    ]
+  })()
+
   if (ready && user) return <Navigate to={roleHome(user.role)} replace />
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
   const submit = async (e) => {
     e.preventDefault()
-    if (mode === 'register' && form.password !== form.confirmPassword) {
-      toast.error('Passwords do not match')
-      return
+    if (mode === 'register') {
+      if (form.password !== form.confirmPassword) {
+        toast.error('Passwords do not match')
+        return
+      }
+      if (!isValidPhMobile(form.phone)) {
+        toast.error('Enter a valid Philippine mobile number (e.g. 0917 123 4567)')
+        return
+      }
     }
     const payload = {
       name: form.name,
@@ -50,8 +71,13 @@ export default function AuthPage() {
       studentId: form.studentId
     }
     try {
-      if (form.schoolMode === 'new') payload.schoolName = form.newSchool
-      else payload.schoolId = form.schoolId
+      if (form.schoolMode === 'new') {
+        payload.schoolName = form.newSchool
+      } else {
+        const sel = String(form.schoolSel || '')
+        if (sel.startsWith('db:')) payload.schoolId = sel.slice(3)
+        else if (sel.startsWith('new:')) payload.schoolName = sel.slice(4)
+      }
 
       const u = mode === 'register' ? await register(payload) : await login(form.email, form.password)
       toast.success(mode === 'register' ? `Welcome to OJT Connect, ${u.name.split(' ')[0]}!` : 'Welcome back!')
@@ -131,7 +157,7 @@ export default function AuthPage() {
           </div>
 
           {socialError && (
-            <div className="social-error-banner">Sign-in with Google, Facebook, or Yahoo failed. Please try again.</div>
+            <div className="social-error-banner">Sign-in with Google or Facebook failed. Please try again.</div>
           )}
 
           <form onSubmit={submit} className="auth-form">
@@ -190,7 +216,7 @@ export default function AuthPage() {
               <>
                 <div className="form-grid">
                   <label className="field">Contact number
-                    {input('phone', { type: 'tel', placeholder: '09xx xxx xxxx' })}
+                    {input('phone', { type: 'tel', placeholder: '0917 xxx xxxx (Philippine mobile)', pattern: '^(09\\d{9}|\\+?639\\d{9})$', title: 'Enter a valid Philippine mobile number, e.g. 0917 123 4567' })}
                   </label>
                   <label className="field">Date of birth
                     {input('birthdate', { type: 'date' })}
@@ -224,10 +250,10 @@ export default function AuthPage() {
                   <button type="button" className={form.schoolMode === 'new' ? 'active' : ''} onClick={() => set('schoolMode', 'new')}>Not listed</button>
                 </div>
                 {form.schoolMode === 'pick' ? (
-                  <select className="input" value={form.schoolId} onChange={(e) => set('schoolId', e.target.value)} required>
-                    <option value="">— select your school —</option>
-                    {schools.map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
+                  <select className="input" value={form.schoolSel} onChange={(e) => set('schoolSel', e.target.value)} required>
+                    <option value="">— select your school or university —</option>
+                    {schoolOptions.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
                 ) : (
@@ -258,10 +284,6 @@ export default function AuthPage() {
                   <a className="social-btn social-facebook" href="/api/auth/facebook">
                     <svg viewBox="0 0 24 24"><path fill="#fff" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07c0 6.02 4.39 11.02 10.13 11.93v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.7 4.53-4.7 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.95.93-1.95 1.87v2.26h3.32l-.53 3.49h-2.79V24C19.61 23.09 24 18.09 24 12.07z"/></svg>
                     Facebook
-                  </a>
-                  <a className="social-btn social-yahoo" href="/api/auth/yahoo">
-                    <svg viewBox="0 0 24 24"><path fill="#fff" d="M7.42 2.03H2.5l5.5 9.84-3.45 7.53h4.82l4.56-9.78c-.06.07.13.31-3.51-7.59zM23.5 2.03H18.9l-6.66 12.4 5.5 7.54h4.76l-3.03-4.16 4.03-7.08z"/></svg>
-                    Yahoo
                   </a>
                 </div>
               </>

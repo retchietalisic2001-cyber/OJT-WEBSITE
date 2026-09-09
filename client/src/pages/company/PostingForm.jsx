@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
 import { useConfirm } from '../../confirm.jsx'
@@ -8,14 +8,34 @@ import LocationPicker from '../../components/LocationPicker.jsx'
 import { toast } from '../../toast.jsx'
 import { COURSES, CITIES, CITY_COORDS } from '../../constants.js'
 
+const DRAFT_KEY = 'ojt_posting_draft'
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function saveDraft(form) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ data: form, savedAt: Date.now() })) } catch {}
+}
+
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY) } catch {}
+}
+
 export default function PostingForm() {
   const { id } = useParams()
   const isEdit = !!id
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const navigate = useNavigate()
   const confirm = useConfirm()
   const [loadingEdit, setLoadingEdit] = useState(isEdit)
   const [verify, setVerify] = useState(null)
+  const [draftAvailable, setDraftAvailable] = useState(false)
+  const loadedRef = useRef(false)
+  const co = user?.profile || {}
 
   const [form, setForm] = useState({
     title: '',
@@ -30,7 +50,42 @@ export default function PostingForm() {
   })
 
   useEffect(() => {
-    if (!isEdit) return
+    const draft = loadDraft()
+    if (draft?.data) {
+      const d = draft.data
+      const hasRealContent = !!(d.title?.trim() || d.description?.trim() || d.requirements?.trim() || d.city?.trim() || d.address?.trim() || (d.course_tags && d.course_tags.length))
+      if (hasRealContent && draft.savedAt && draft.savedAt < Date.now() - 5000) {
+        setDraftAvailable(true)
+      }
+    }
+  }, [])
+
+  const matchCity = (addr) => {
+    const a = String(addr || '').toLowerCase()
+    return CITIES.find((c) => a.includes(c.toLowerCase())) || ''
+  }
+
+  const applyCompanyLocation = (silent = false) => {
+    if (co.lat == null || co.lng == null) return false
+    setForm((f) => ({
+      ...f,
+      lat: Number(co.lat),
+      lng: Number(co.lng),
+      address: f.address || co.address || '',
+      city: f.city || matchCity(co.address)
+    }))
+    if (!silent) toast.success('Location set to your company office')
+    return true
+  }
+
+  useEffect(() => {
+    if (!isEdit) {
+      if (!applyCompanyLocation(true)) {
+        toast.info('No company location saved yet — add it once on your profile and it auto-fills next time')
+      }
+      loadedRef.current = true
+      return
+    }
     api(`/postings/${id}`, { token })
       .then((p) =>
         setForm({
@@ -48,6 +103,14 @@ export default function PostingForm() {
       .finally(() => setLoadingEdit(false))
       .catch((e) => toast.error(e.message))
   }, [id, isEdit, token])
+
+  useEffect(() => {
+    if (!loadedRef.current) return
+    const draft = loadDraft()
+    if (draft?.data && draft.savedAt && draft.savedAt > Date.now() - 1000) return
+    saveDraft(form)
+    setDraftAvailable(false)
+  }, [form, isEdit])
 
   useEffect(() => {
     api('/verify/status', { token }).then(setVerify).catch(() => {})
@@ -76,6 +139,14 @@ export default function PostingForm() {
   }
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  const restoreDraft = () => {
+    const draft = loadDraft()
+    if (!draft?.data) return
+    setForm({ ...draft.data })
+    setDraftAvailable(false)
+    toast.success('Draft restored')
+  }
 
   const toggleTag = (t) => {
     const has = form.course_tags.includes(t)
@@ -125,6 +196,7 @@ export default function PostingForm() {
         await api('/postings', { method: 'POST', token, body })
         toast.success('Posting published! Applicants can now find you.')
       }
+      clearDraft()
       navigate('/company')
     } catch (e) {
       toast.error(e.message)
@@ -140,6 +212,13 @@ export default function PostingForm() {
           <p className="muted">Tell applicants what your internship offers — the more specific, the better.</p>
         </div>
       </header>
+
+      {draftAvailable && (
+        <div className="draft-banner">
+          <span>Unsaved changes from a previous session were found.</span>
+          <button className="btn btn-sm btn-primary" onClick={restoreDraft}>Restore draft</button>
+        </div>
+      )}
 
       <div className="card card-pad posting-form">
         <h3>Role</h3>
@@ -189,6 +268,11 @@ export default function PostingForm() {
               onChange={(c) => { set('lat', c.lat); set('lng', c.lng) }}
             />
           </label>
+          <div className="field full">
+            <button type="button" className="btn btn-ghost" onClick={() => applyCompanyLocation()}>
+              📍 Use my company office location {co.lat != null ? <em className="muted" style={{ fontStyle: 'normal' }}>({String(co.address || '').slice(0, 30)})</em> : ''}
+            </button>
+          </div>
         </div>
 
         <div className="form-actions">

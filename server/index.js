@@ -6,7 +6,7 @@ import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { Server } from 'socket.io'
 import passport from 'passport'
-import { UPLOADS_DIR, get, initSchema } from './db.js'
+import { UPLOADS_DIR, get, initSchema, closeDb } from './db.js'
 import { attachSocketUser } from './middleware/auth.js'
 
 import authRoutes from './routes/auth.js'
@@ -16,10 +16,12 @@ import schoolsRoutes from './routes/schools.js'
 import postingsRoutes from './routes/postings.js'
 import applicationsRoutes from './routes/applications.js'
 import messagesRoutes from './routes/messages.js'
+import chatRoutes from './routes/chat.js'
 import resumeRoutes from './routes/resume.js'
 import recommendationsRoutes from './routes/recommendations.js'
 import supportRoutes from './routes/support.js'
 import verifyRoutes from './routes/verify.js'
+import viewfileRoutes from './routes/viewfile.js'
 import { adminSockets } from './presence.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -40,10 +42,12 @@ app.use('/api/schools', schoolsRoutes)
 app.use('/api/postings', postingsRoutes)
 app.use('/api/applications', applicationsRoutes)
 app.use('/api/messages', messagesRoutes)
+app.use('/api/chat', chatRoutes)
 app.use('/api/resume', resumeRoutes)
 app.use('/api/recommendations', recommendationsRoutes)
 app.use('/api/support', supportRoutes)
 app.use('/api/verify', verifyRoutes)
+app.use('/api/preview', viewfileRoutes)
 
 // Serve built client (after `npm --prefix client run build`).
 const distDir = path.join(__dirname, '..', 'client', 'dist')
@@ -83,11 +87,35 @@ io.on('connection', (socket) => {
     adminSockets.delete(socket.id)
   })
 
-  socket.on('join', async (applicationId) => {
+  socket.on('join', async (payload) => {
     try {
+      // { type: 'application', applicationId } or { type: 'school', studentId }
+      const type = payload?.type || 'application'
+      if (type === 'school') {
+        const studentId = Number(payload.studentId)
+        const student = await get(
+          `SELECT u.id, ap.school_id FROM users u JOIN applicant_profiles ap ON ap.user_id = u.id WHERE u.id = ?`,
+          studentId
+        )
+        let ok = false
+        if (student && student.school_id) {
+          if (socket.user.role === 'applicant' && socket.user.id === studentId) ok = true
+          else if (socket.user.role === 'school') {
+            const coord = await get('SELECT school_id FROM school_coordinators WHERE user_id = ?', socket.user.id)
+            ok = coord?.school_id === student.school_id
+          }
+        }
+        if (ok) {
+          socket.join(`schat-${student.school_id}-${studentId}`)
+          socket.emit('joined', { type: 'school', studentId })
+        } else {
+          socket.emit('join-error', { message: 'No access to this conversation' })
+        }
+        return
+      }
       const ctx = await get(
         `SELECT a.id, a.applicant_id, p.company_id FROM applications a JOIN postings p ON p.id = a.posting_id WHERE a.id = ?`,
-        Number(applicationId)
+        Number(payload)
       )
       const ok =
         ctx &&
@@ -104,7 +132,17 @@ io.on('connection', (socket) => {
     }
   })
 
-  socket.on('typing', ({ applicationId, sender }) => {
+  socket.on('typing', async (payload) => {
+    const { sender } = payload || {}
+    if (payload?.type === 'school') {
+      const studentId = Number(payload.studentId)
+      if (!studentId || !sender) return
+      const ap = await get('SELECT school_id FROM applicant_profiles WHERE user_id = ?', studentId)
+      if (!ap?.school_id) return
+      socket.to(`schat-${ap.school_id}-${studentId}`).emit('typing', { type: 'school', studentId, sender })
+      return
+    }
+    const applicationId = payload?.applicationId
     if (!applicationId) return
     socket.to(`app-${applicationId}`).emit('typing', { applicationId, sender })
   })
@@ -134,3 +172,17 @@ server.listen(PORT, async () => {
     process.exit(1)
   }
 })
+
+function shutdown(signal) {
+  console.log(`\n  ${signal} received — shutting down gracefully…`)
+  server.close(async () => {
+    try {
+      await closeDb()
+    } catch {}
+    process.exit(0)
+  })
+  setTimeout(() => process.exit(1), 5000)
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))

@@ -1,7 +1,8 @@
 import { Router } from 'express'
-import { all, get, run, nowTs, APPLICATION_STATUSES, STATUS_META } from '../db.js'
+import { all, get, run, transaction, nowTs, APPLICATION_STATUSES, STATUS_META } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { attachResumeToApplication } from './resume.js'
+import { generateCover } from '../services/recommender.js'
 
 const router = Router()
 
@@ -16,7 +17,7 @@ function serializeApplication(row) {
 
 router.post('/', requireRole('applicant'), async (req, res, next) => {
   try {
-    const { posting_id, cover_message } = req.body
+    const { posting_id, cover_message, ai_cover } = req.body
     const posting = await get('SELECT * FROM postings WHERE id = ?', posting_id)
     if (!posting) return res.status(404).json({ error: 'Posting not found' })
     if (posting.status !== 'open') return res.status(400).json({ error: 'This posting is no longer accepting applications' })
@@ -28,14 +29,30 @@ router.post('/', requireRole('applicant'), async (req, res, next) => {
     )
     if (existing) return res.status(409).json({ error: 'You already have an active application for this posting' })
 
-    const id = await run(
-      'INSERT INTO applications (posting_id, applicant_id, cover_message, status) VALUES (?, ?, ?, ?)',
-      posting_id,
-      req.user.id,
-      String(cover_message || '').trim(),
-      'submitted'
-    )
-    await run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', id, 'submitted', 'Your application was submitted')
+    let cover = String(cover_message || '').trim()
+    if (!cover && ai_cover) {
+      const applicant = await get('SELECT id, name FROM users WHERE id = ?', req.user.id)
+      const profile = (await get('SELECT * FROM applicant_profiles WHERE user_id = ?', req.user.id)) || {}
+      const company = await get('SELECT company_name FROM company_profiles WHERE user_id = ?', posting.company_id)
+      cover = generateCover({
+        applicantName: (applicant?.name || 'a student').split(' ').slice(0, 2).join(' '),
+        course: profile.course,
+        yearLevel: profile.year_level,
+        posting: { ...posting, company_name: company?.company_name }
+      })
+    }
+
+    const id = await transaction(async (tx) => {
+      const id = await tx.run(
+        'INSERT INTO applications (posting_id, applicant_id, cover_message, status) VALUES (?, ?, ?, ?)',
+        posting_id,
+        req.user.id,
+        cover,
+        'submitted'
+      )
+      await tx.run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', id, 'submitted', 'Your application was submitted')
+      return id
+    })
 
     let resumeAttached = false
     let resumeMissing = false
@@ -76,7 +93,7 @@ router.get('/company', requireRole('company'), async (req, res) => {
   let rows
   if (postingId) {
     rows = await all(
-      `SELECT a.*, p.title AS posting_title, p.city, u.name AS applicant_name, ap.course, ap.year_level, ap.phone, s.name AS school_name
+      `SELECT a.*, p.title AS posting_title, p.city, u.name AS applicant_name, u.email AS applicant_email, ap.course, ap.year_level, ap.phone, s.name AS school_name
        FROM applications a
        JOIN postings p ON p.id = a.posting_id
        JOIN users u ON u.id = a.applicant_id
@@ -89,7 +106,7 @@ router.get('/company', requireRole('company'), async (req, res) => {
     )
   } else {
     rows = await all(
-      `SELECT a.*, p.title AS posting_title, p.city, u.name AS applicant_name, ap.course, ap.year_level, ap.phone, s.name AS school_name
+      `SELECT a.*, p.title AS posting_title, p.city, u.name AS applicant_name, u.email AS applicant_email, ap.course, ap.year_level, ap.phone, s.name AS school_name
        FROM applications a
        JOIN postings p ON p.id = a.posting_id
        JOIN users u ON u.id = a.applicant_id
@@ -112,7 +129,8 @@ async function loadFullApplication(id) {
             c.company_name, c.industry, c.description AS company_description, c.address AS company_address,
             c.lat AS company_lat, c.lng AS company_lng,
             (SELECT m.file_path FROM messages m WHERE m.application_id = a.id AND m.file_mime = 'application/pdf' AND m.file_name LIKE 'Resume_%' ORDER BY m.id DESC LIMIT 1) AS resume_path,
-            (SELECT m.file_name FROM messages m WHERE m.application_id = a.id AND m.file_mime = 'application/pdf' AND m.file_name LIKE 'Resume_%' ORDER BY m.id DESC LIMIT 1) AS resume_name
+            (SELECT m.file_name FROM messages m WHERE m.application_id = a.id AND m.file_mime = 'application/pdf' AND m.file_name LIKE 'Resume_%' ORDER BY m.id DESC LIMIT 1) AS resume_name,
+            (SELECT m.file_size FROM messages m WHERE m.application_id = a.id AND m.file_mime = 'application/pdf' AND m.file_name LIKE 'Resume_%' ORDER BY m.id DESC LIMIT 1) AS resume_size
      FROM applications a
      JOIN postings p ON p.id = a.posting_id
      JOIN users u ON u.id = a.applicant_id
@@ -152,8 +170,10 @@ router.put('/:id/status', requireRole('company'), async (req, res) => {
   const note = String(req.body?.note || '').trim()
   if (status === 'rejected' && !note) return res.status(400).json({ error: 'Please provide a reason when declining an application' })
 
-  await run('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?', status, nowTs(), row.id)
-  await run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', row.id, status, note)
+  await transaction(async (tx) => {
+    await tx.run('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?', status, nowTs(), row.id)
+    await tx.run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', row.id, status, note)
+  })
 
   const updated = await loadFullApplication(row.id)
   updated.status_history = await all('SELECT * FROM status_history WHERE application_id = ? ORDER BY id ASC', row.id)
@@ -167,8 +187,10 @@ router.post('/:id/withdraw', requireRole('applicant'), async (req, res) => {
   if (row.status === 'withdrawn') return res.status(400).json({ error: 'Already withdrawn' })
   if (['accepted'].includes(row.status)) return res.status(400).json({ error: 'Cannot withdraw after acceptance' })
 
-  await run('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?', 'withdrawn', nowTs(), row.id)
-  await run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', row.id, 'withdrawn', 'Application withdrawn by applicant')
+  await transaction(async (tx) => {
+    await tx.run('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?', 'withdrawn', nowTs(), row.id)
+    await tx.run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', row.id, 'withdrawn', 'Application withdrawn by applicant')
+  })
 
   const updated = await loadFullApplication(row.id)
   updated.status_history = await all('SELECT * FROM status_history WHERE application_id = ? ORDER BY id ASC', row.id)

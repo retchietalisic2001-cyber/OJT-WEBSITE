@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS users (
   address TEXT NOT NULL DEFAULT '',
   birthdate TEXT NOT NULL DEFAULT '',
   gender TEXT NOT NULL DEFAULT '',
+  must_change_password INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -70,7 +71,8 @@ CREATE TABLE IF NOT EXISTS applicant_profiles (
   phone TEXT NOT NULL DEFAULT '',
   search_city TEXT NOT NULL DEFAULT '',
   search_lat REAL,
-  search_lng REAL
+  search_lng REAL,
+  search_radius REAL NOT NULL DEFAULT 25
 );
 
 CREATE TABLE IF NOT EXISTS school_courses (
@@ -97,8 +99,10 @@ CREATE TABLE IF NOT EXISTS enrollments (
   room_id INTEGER REFERENCES school_rooms(id) ON DELETE SET NULL,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   student_id TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited','active')),
+  invite_action TEXT NOT NULL DEFAULT '' CHECK (invite_action IN ('','accepted','declined')),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -155,6 +159,21 @@ CREATE TABLE IF NOT EXISTS status_history (
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sender_role TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  file_name TEXT,
+  file_path TEXT,
+  file_mime TEXT,
+  file_size INTEGER,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS school_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sender_role TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
@@ -255,6 +274,7 @@ export async function initSchema() {
         search_city VARCHAR(255) NOT NULL DEFAULT '',
         search_lat DOUBLE NULL,
         search_lng DOUBLE NULL,
+        search_radius DOUBLE NOT NULL DEFAULT 25,
         CONSTRAINT fk_ap_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         CONSTRAINT fk_ap_school FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -283,8 +303,10 @@ export async function initSchema() {
         room_id INT NULL,
         user_id INT NULL,
         student_id VARCHAR(100) NOT NULL,
+        email VARCHAR(255) NOT NULL DEFAULT '',
         name VARCHAR(255) NOT NULL DEFAULT '',
         status ENUM('invited','active') NOT NULL DEFAULT 'invited',
+        invite_action VARCHAR(20) NOT NULL DEFAULT '',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_enrollments_student (student_id),
         CONSTRAINT fk_enr_school FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
@@ -352,6 +374,23 @@ export async function initSchema() {
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT fk_m_app FOREIGN KEY (application_id) REFERENCES applications(id) ON DELETE CASCADE,
         CONSTRAINT fk_m_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS school_messages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        school_id INT NOT NULL,
+        student_id INT NOT NULL,
+        sender_id INT NOT NULL,
+        sender_role VARCHAR(50) NOT NULL,
+        content TEXT,
+        file_name VARCHAR(255) NULL,
+        file_path VARCHAR(500) NULL,
+        file_mime VARCHAR(150) NULL,
+        file_size INT NULL,
+        is_read TINYINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_sm_school FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+        CONSTRAINT fk_sm_student FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_sm_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       `CREATE TABLE IF NOT EXISTS resumes (
         applicant_id INT PRIMARY KEY,
@@ -421,7 +460,8 @@ const NEW_USER_COLUMNS = [
   ['birthdate', "VARCHAR(10) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"],
   ['gender', "VARCHAR(20) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"],
   ['is_verified', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
-  ['avatar', "VARCHAR(500) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"]
+  ['avatar', "VARCHAR(500) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"],
+  ['must_change_password', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0']
 ]
 
 async function migrateSchema() {
@@ -461,6 +501,24 @@ async function migrateSchema() {
     }
     try {
       await db.query(`ALTER TABLE applicant_profiles ADD COLUMN IF NOT EXISTS student_id VARCHAR(100) NOT NULL DEFAULT ''`)
+    } catch (err) {
+      if (err?.code === 'ER_DUP_FIELDNAME') throw err
+      if (err?.code === 'ER_DUP_KEYNAME') throw err
+    }
+    try {
+      await db.query(`ALTER TABLE applicant_profiles ADD COLUMN IF NOT EXISTS search_radius DOUBLE NOT NULL DEFAULT 25`)
+    } catch (err) {
+      if (err?.code === 'ER_DUP_FIELDNAME') throw err
+      if (err?.code === 'ER_DUP_KEYNAME') throw err
+    }
+    try {
+      await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS email VARCHAR(255) NOT NULL DEFAULT ''`)
+    } catch (err) {
+      if (err?.code === 'ER_DUP_FIELDNAME') throw err
+      if (err?.code === 'ER_DUP_KEYNAME') throw err
+    }
+    try {
+      await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS invite_action VARCHAR(20) NOT NULL DEFAULT ''`)
     } catch (err) {
       if (err?.code === 'ER_DUP_FIELDNAME') throw err
       if (err?.code === 'ER_DUP_KEYNAME') throw err
@@ -505,10 +563,11 @@ async function migrateSchema() {
         gender TEXT NOT NULL DEFAULT '',
         is_verified INTEGER NOT NULL DEFAULT 0,
         avatar TEXT NOT NULL DEFAULT '',
+        must_change_password INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );`)
-      db.exec(`INSERT INTO users (id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, avatar, created_at)
-        SELECT id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, avatar, created_at FROM users_old;`)
+      db.exec(`INSERT INTO users (id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, avatar, must_change_password, created_at)
+        SELECT id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, avatar, COALESCE(must_change_password, 0), created_at FROM users_old;`)
       db.exec('DROP TABLE users_old;')
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username ON users(username);')
       db.exec('PRAGMA foreign_keys = ON;')
@@ -553,6 +612,10 @@ const reqCols = db.prepare('PRAGMA table_info(account_requests)').all().map((c) 
     }
     const apCols = db.prepare('PRAGMA table_info(applicant_profiles)').all().map((c) => c.name)
     if (!apCols.includes('student_id')) db.exec("ALTER TABLE applicant_profiles ADD COLUMN student_id TEXT NOT NULL DEFAULT ''")
+    if (!apCols.includes('search_radius')) db.exec('ALTER TABLE applicant_profiles ADD COLUMN search_radius REAL NOT NULL DEFAULT 25')
+    const enrCols = db.prepare('PRAGMA table_info(enrollments)').all().map((c) => c.name)
+    if (!enrCols.includes('email')) db.exec("ALTER TABLE enrollments ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+    if (!enrCols.includes('invite_action')) db.exec("ALTER TABLE enrollments ADD COLUMN invite_action TEXT NOT NULL DEFAULT ''")
     const cpCols = db.prepare('PRAGMA table_info(company_profiles)').all().map((c) => c.name)
     if (!cpCols.includes('logo')) db.exec("ALTER TABLE company_profiles ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
     const schCols = db.prepare('PRAGMA table_info(schools)').all().map((c) => c.name)
@@ -656,3 +719,59 @@ export const STATUS_META = {
 // Compatibility: expose `db` for direct prepare() usage (SQLite path only).
 // Prefer run/get/all helpers instead.
 export { db }
+
+export async function transaction(fn) {
+  if (DB_MODE === 'mysql') {
+    const conn = await db.getConnection()
+    try {
+      await conn.beginTransaction()
+      const result = await fn({
+        run: async (sql, ...params) => {
+          const [res] = await conn.query(sql, params)
+          return Number(res.insertId)
+        },
+        get: async (sql, ...params) => {
+          const [rows] = await conn.query(sql, params)
+          return rows[0] ?? null
+        },
+        all: async (sql, ...params) => {
+          const [rows] = await conn.query(sql, params)
+          return rows
+        }
+      })
+      await conn.commit()
+      return result
+    } catch (err) {
+      await conn.rollback()
+      throw err
+    } finally {
+      conn.release()
+    }
+  } else {
+    try {
+      db.exec('BEGIN')
+      const result = await fn({
+        run: (sql, ...params) => {
+          const stmt = db.prepare(sql)
+          const res = stmt.run(...params)
+          return Number(res.lastInsertRowid)
+        },
+        get: (sql, ...params) => db.prepare(sql).get(...params),
+        all: (sql, ...params) => db.prepare(sql).all(...params)
+      })
+      db.exec('COMMIT')
+      return result
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+}
+
+export async function closeDb() {
+  if (DB_MODE === 'mysql') {
+    await db.end()
+  } else {
+    db.close()
+  }
+}

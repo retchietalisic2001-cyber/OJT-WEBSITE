@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { get, run, all } from '../db.js'
+import { get, run, all, transaction } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { uploadFor } from '../middleware/upload.js'
 import { adminSockets } from '../presence.js'
@@ -80,16 +80,20 @@ router.patch('/requests/:id', async (req, res, next) => {
     const existing = await get('SELECT * FROM account_requests WHERE id = ?', id)
     if (!existing) return res.status(404).json({ error: 'Request not found' })
     if (existing.status !== status) {
-      await run('UPDATE account_requests SET status = ? WHERE id = ?', status, id)
       if (status === 'approved' || status === 'rejected') {
         let details = {}
         try {
           details = JSON.parse(existing.details || '{}')
         } catch {}
         const email = String(details.email || '').trim()
-        if (status === 'approved' && email) {
-          await run('UPDATE users SET is_verified = 1 WHERE lower(email) = lower(?)', email)
-        }
+
+        await transaction(async (tx) => {
+          await tx.run('UPDATE account_requests SET status = ? WHERE id = ?', status, id)
+          if (status === 'approved' && email) {
+            await tx.run('UPDATE users SET is_verified = 1 WHERE lower(email) = lower(?)', email)
+          }
+        })
+
         if (email) {
           sendAccountRequestEmail({
             to: email,
@@ -98,6 +102,8 @@ router.patch('/requests/:id', async (req, res, next) => {
             status
           })
         }
+      } else {
+        await run('UPDATE account_requests SET status = ? WHERE id = ?', status, id)
       }
     }
     res.json({ ok: true, id })

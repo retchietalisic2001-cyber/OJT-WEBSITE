@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useAuth } from '../store.jsx'
 import { useConfirm } from '../confirm.jsx'
 import { api } from '../api.js'
@@ -6,14 +6,35 @@ import { Spinner } from '../components/ui.jsx'
 import LocationPicker from '../components/LocationPicker.jsx'
 import VerificationPanel from '../components/VerificationPanel.jsx'
 import { toast } from '../toast.jsx'
-import { COURSES, YEAR_LEVELS, CITIES, CITY_COORDS } from '../constants.js'
+import { COURSES, YEAR_LEVELS, CITIES, CITY_COORDS, REGION_CITIES, cityRegion, regionForLocation } from '../constants.js'
+import { useNavigate } from 'react-router-dom'
+
+const DRAFT_KEY = 'ojt_profile_draft'
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function saveDraft(form) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ data: form, savedAt: Date.now() })) } catch {}
+}
+
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY) } catch {}
+}
 
 export default function ProfilePage() {
   const { token, user, setProfile } = useAuth()
   const confirm = useConfirm()
+  const navigate = useNavigate()
   const [schools, setSchools] = useState([])
   const [avatarBusy, setAvatarBusy] = useState(false)
   const [logoBusy, setLogoBusy] = useState(false)
+  const [draftAvailable, setDraftAvailable] = useState(false)
+  const loadedRef = useRef(false)
   const p = (user && user.profile) || {}
   const role = user?.role || ''
 
@@ -27,6 +48,9 @@ export default function ProfilePage() {
     yearLevel: p.year_level || '',
     studentId: p.student_id || '',
     searchCity: p.search_city || '',
+    searchLat: p.search_lat != null ? Number(p.search_lat) : null,
+    searchLng: p.search_lng != null ? Number(p.search_lng) : null,
+    searchRadius: p.search_radius != null ? Number(p.search_radius) : 25,
     schoolId: p.school_id || '',
     schoolName: '',
     courseMode: p.course && !COURSES.includes(p.course) ? 'other' : 'pick',
@@ -54,6 +78,9 @@ export default function ProfilePage() {
       yearLevel: u.year_level || '',
       studentId: u.student_id || '',
       searchCity: u.search_city || '',
+      searchLat: u.search_lat != null ? Number(u.search_lat) : null,
+      searchLng: u.search_lng != null ? Number(u.search_lng) : null,
+      searchRadius: u.search_radius != null ? Number(u.search_radius) : 25,
       schoolId: u.school_id || '',
       companyName: u.company_name || '',
       industry: u.industry || '',
@@ -61,12 +88,38 @@ export default function ProfilePage() {
       address: role === 'company' ? (u.address || '') : (user.address || ''),
       position: u.position || ''
     })
+    loadedRef.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id])
+
+  useEffect(() => {
+    const draft = loadDraft()
+    if (draft?.data && draft.savedAt && draft.savedAt < Date.now() - 5000) {
+      const d = draft.data
+      const hasRealContent = Object.values(d).some((v) => (Array.isArray(v) ? v.length > 0 : typeof v === 'string' ? v.trim().length > 0 : v))
+      if (hasRealContent) setDraftAvailable(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!loadedRef.current) return
+    const draft = loadDraft()
+    if (draft?.data && draft.savedAt && draft.savedAt > Date.now() - 1000) return
+    saveDraft(form)
+    setDraftAvailable(false)
+  }, [form])
 
   if (!user) return <Spinner />
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  const restoreDraft = () => {
+    const draft = loadDraft()
+    if (!draft?.data) return
+    setForm({ ...draft.data })
+    setDraftAvailable(false)
+    toast.success('Draft restored')
+  }
 
   const save = async () => {
     const ok = await confirm({
@@ -79,6 +132,7 @@ export default function ProfilePage() {
     try {
       const updated = await api('/auth/profile', { method: 'PUT', token, body: form })
       setProfile(updated)
+      clearDraft()
       toast.success('Profile updated')
     } catch (e) {
       toast.error(e.message)
@@ -160,8 +214,18 @@ export default function ProfilePage() {
           <h1>My Profile</h1>
           <p className="muted">Keep your details up to date — companies use this to review you.</p>
         </div>
-        <button className="btn btn-primary" onClick={save}>Save changes</button>
+        <div className="head-actions">
+          <button className="btn btn-ghost" onClick={() => navigate('/change-password')} style={{ marginRight: 8 }}>Change password</button>
+          <button className="btn btn-primary" onClick={save}>Save changes</button>
+        </div>
       </header>
+
+      {draftAvailable && (
+        <div className="draft-banner">
+          <span>Unsaved changes from a previous session were found.</span>
+          <button className="btn btn-sm btn-primary" onClick={restoreDraft}>Restore draft</button>
+        </div>
+      )}
 
       <div className="card card-pad profile-form">
         <div className="avatar-picker">
@@ -282,17 +346,52 @@ export default function ProfilePage() {
 
             <h3>Search area</h3>
             <p className="muted small">Recommendations and search radius are centered around this area.</p>
-            <div className="form-grid">
-              <label className="field">Preferred city
-                <select className="input" value={form.searchCity} onChange={(e) => { set('searchCity', e.target.value); pickCity(e.target.value) }}>
-                  <option value="">Anywhere in Metro Manila</option>
-                  {CITIES.map((c) => <option key={c}>{c}</option>)}
-                </select>
+            {(() => {
+              const prefRegion = form.searchCity
+                ? cityRegion(form.searchCity)
+                : form.searchLat != null
+                  ? regionForLocation(form.searchLat, form.searchLng)
+                  : null
+              const prefCities = prefRegion && REGION_CITIES[prefRegion] ? REGION_CITIES[prefRegion] : CITIES
+              return (
+                <div className="form-grid">
+                  <label className="field">Preferred city{prefRegion ? ` · ${prefRegion}` : ''}
+                    <select className="input" value={form.searchCity} onChange={(e) => { set('searchCity', e.target.value); pickCity(e.target.value) }}>
+                      <option value="">Anywhere in the Philippines</option>
+                      {prefCities.map((c) => <option key={c}>{c}</option>)}
+                    </select>
+                  </label>
+                  <div className="field">
+                    <span className="field-label">&nbsp;</span>
+                    <button className="btn btn-ghost" onClick={useMyLocation}>📍 Use my location</button>
+                  </div>
+                </div>
+              )
+            })()}
+            <label className="field-label">Search area on map</label>
+            <LocationPicker
+              value={form.searchLat != null ? [form.searchLat, form.searchLng] : undefined}
+              radiusKm={form.searchRadius}
+              onChange={({ lat, lng }) => {
+                set('searchLat', lat)
+                set('searchLng', lng)
+                set('searchCity', '')
+              }}
+            />
+            <div className="field radius-field" style={{ marginTop: 14 }}>
+              <span className="field-label">Maximum area (search radius)</span>
+              <label className="radius-label">
+                <strong>{form.searchRadius} km</strong>
               </label>
-              <div className="field">
-                <span className="field-label">&nbsp;</span>
-                <button className="btn btn-ghost" onClick={useMyLocation}>📍 Use my location</button>
-              </div>
+              <input
+                type="range"
+                min="1"
+                max="100"
+                value={form.searchRadius}
+                onChange={(e) => set('searchRadius', +e.target.value)}
+                className="range"
+              />
+              <p className="muted small">⭕ Circle = the maximum area where a company offering OJT will be located.</p>
             </div>
           </>
         )}

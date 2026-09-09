@@ -1,8 +1,9 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
-import { get, run, all } from '../db.js'
+import { get, run, all, transaction } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { findOrCreateSchool } from '../services/users.js'
+import { sendAccountCredentials } from '../mailer.js'
 
 const router = Router()
 router.use(requireAuth, requireRole('admin'))
@@ -66,23 +67,34 @@ router.post('/users/company', async (req, res, next) => {
     if (await identifierTaken(cleanEmail, uname)) return res.status(409).json({ error: 'That email or username is already in use' })
 
     const hash = await bcrypt.hash(password, 10)
-    const id = await run(
-      'INSERT INTO users (name, email, username, password_hash, role, phone, is_verified) VALUES (?, ?, ?, ?, ?, ?, 1)',
-      String(name).trim(),
-      cleanEmail,
-      uname || null,
-      hash,
-      'company',
-      String(phone || '').trim()
-    )
-    await run(
-      'INSERT INTO company_profiles (user_id, company_name, industry, description, address) VALUES (?, ?, ?, ?, ?)',
-      id,
-      String(companyName).trim(),
-      String(industry || '').trim(),
-      String(description || '').trim(),
-      String(address || '').trim()
-    )
+    const id = await transaction(async (tx) => {
+      const id = await tx.run(
+        'INSERT INTO users (name, email, username, password_hash, role, phone, is_verified, must_change_password) VALUES (?, ?, ?, ?, ?, ?, 1, 1)',
+        String(name).trim(),
+        cleanEmail,
+        uname || null,
+        hash,
+        'company',
+        String(phone || '').trim()
+      )
+      await tx.run(
+        'INSERT INTO company_profiles (user_id, company_name, industry, description, address) VALUES (?, ?, ?, ?, ?)',
+        id,
+        String(companyName).trim(),
+        String(industry || '').trim(),
+        String(description || '').trim(),
+        String(address || '').trim()
+      )
+      return id
+    })
+    await sendAccountCredentials({
+      to: cleanEmail,
+      name: String(name).trim(),
+      login: uname || cleanEmail,
+      password,
+      role: 'company',
+      orgName: String(companyName).trim()
+    })
     res.status(201).json({ ok: true, id })
   } catch (err) {
     next(err)
@@ -109,21 +121,32 @@ router.post('/users/school', async (req, res, next) => {
 
     const school = await findOrCreateSchool(schoolName)
     const hash = await bcrypt.hash(password, 10)
-    const id = await run(
-      'INSERT INTO users (name, email, username, password_hash, role, phone, is_verified) VALUES (?, ?, ?, ?, ?, ?, 1)',
-      String(name).trim(),
-      cleanEmail,
-      uname || null,
-      hash,
-      'school',
-      String(phone || '').trim()
-    )
-    await run(
-      'INSERT INTO school_coordinators (user_id, school_id, position) VALUES (?, ?, ?)',
-      id,
-      school.id,
-      String(position || '').trim() || 'OJT Coordinator'
-    )
+    const id = await transaction(async (tx) => {
+      const id = await tx.run(
+        'INSERT INTO users (name, email, username, password_hash, role, phone, is_verified, must_change_password) VALUES (?, ?, ?, ?, ?, ?, 1, 1)',
+        String(name).trim(),
+        cleanEmail,
+        uname || null,
+        hash,
+        'school',
+        String(phone || '').trim()
+      )
+      await tx.run(
+        'INSERT INTO school_coordinators (user_id, school_id, position) VALUES (?, ?, ?)',
+        id,
+        school.id,
+        String(position || '').trim() || 'OJT Coordinator'
+      )
+      return id
+    })
+    await sendAccountCredentials({
+      to: cleanEmail,
+      name: String(name).trim(),
+      login: uname || cleanEmail,
+      password,
+      role: 'school',
+      orgName: String(schoolName).trim()
+    })
     res.status(201).json({ ok: true, id })
   } catch (err) {
     next(err)

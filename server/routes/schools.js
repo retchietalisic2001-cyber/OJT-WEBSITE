@@ -1,19 +1,33 @@
 import { Router } from 'express'
-import { all, get, run } from '../db.js'
+import { all, get, run, transaction } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { isVerified } from './verify.js'
+import { sendInviteEmail } from '../mailer.js'
 
 const router = Router()
 
-export async function matchEnrollmentByStudentId(userId, studentId) {
+export async function matchEnrollmentByStudentId(userId, studentId, email) {
   const sid = String(studentId || '').trim()
-  if (!sid) return null
+  const em = String(email || '').trim().toLowerCase()
+  if (!sid && !em) return null
+  const conds = []
+  const params = []
+  if (sid) {
+    conds.push('lower(e.student_id) = lower(?)')
+    params.push(sid)
+  }
+  if (em) {
+    conds.push('lower(e.email) = ?')
+    params.push(em)
+  }
   const e = await get(
-    `SELECT e.* FROM enrollments e WHERE e.status = 'invited' AND e.user_id IS NULL AND lower(e.student_id) = lower(?) LIMIT 1`,
-    sid
+    `SELECT e.* FROM enrollments e WHERE e.status = 'invited' AND e.user_id IS NULL
+     AND e.invite_action IN ('', 'accepted')
+     AND (${conds.join(' OR ')}) LIMIT 1`,
+    ...params
   )
   if (!e) return null
-  await run("UPDATE enrollments SET user_id = ?, status = 'active' WHERE id = ?", userId, e.id)
+  await run('UPDATE enrollments SET user_id = ?, email = ? WHERE id = ?', userId, em || e.email, e.id)
   const ap = await get('SELECT school_id FROM applicant_profiles WHERE user_id = ?', userId)
   if (ap && !ap.school_id && e.school_id) {
     await run('UPDATE applicant_profiles SET school_id = ? WHERE user_id = ?', e.school_id, userId)
@@ -196,8 +210,10 @@ router.delete('/courses/:id', requireAuth, requireRole('school'), async (req, re
     if (!course) return res.status(404).json({ error: 'Course not found' })
     const used = await get('SELECT id FROM enrollments WHERE course_id = ? LIMIT 1', course.id)
     if (used) return res.status(400).json({ error: 'Delete students from this course first before removing it' })
-    await run('DELETE FROM school_rooms WHERE course_id = ?', course.id)
-    await run('DELETE FROM school_courses WHERE id = ?', course.id)
+    await transaction(async (tx) => {
+      await tx.run('DELETE FROM school_rooms WHERE course_id = ?', course.id)
+      await tx.run('DELETE FROM school_courses WHERE id = ?', course.id)
+    })
     res.json({ ok: true })
   } catch (err) { next(err) }
 })
@@ -236,9 +252,9 @@ router.get('/enrollments', requireAuth, requireRole('school'), async (req, res, 
     if (!schoolId) return
 
     const rows = await all(
-      `SELECT e.id AS enrollment_id, e.student_id, e.status, e.created_at AS added_at,
+      `SELECT e.id AS enrollment_id, e.student_id, e.email, e.status, e.invite_action, e.created_at AS added_at,
               e.user_id, e.course_id, e.room_id,
-              u.name, u.email, ap.student_id AS profile_student_id, ap.school_id,
+              u.name, u.email AS user_email, ap.student_id AS profile_student_id, ap.school_id,
               (SELECT COUNT(*) FROM applications a WHERE a.applicant_id = e.user_id) AS applications_count,
               (SELECT a.status FROM applications a WHERE a.applicant_id = e.user_id ORDER BY a.updated_at DESC LIMIT 1) AS latest_status
        FROM enrollments e
@@ -281,10 +297,58 @@ router.get('/enrollments', requireAuth, requireRole('school'), async (req, res, 
       school_name: school?.name || '',
       total_active: rows.filter((x) => x.status === 'active').length + legacy.length,
       total_invited: rows.filter((x) => x.status === 'invited').length,
+      pending_invited: rows.filter((x) => x.status === 'invited' && !x.invite_action).length,
+      accepted_invited: rows.filter((x) => x.status === 'invited' && x.invite_action === 'accepted').length,
+      declined_invited: rows.filter((x) => x.invite_action === 'declined').length,
       courses,
       unassigned,
       legacy
     })
+  } catch (err) { next(err) }
+})
+
+router.get('/enrollments/search', requireAuth, requireRole('school'), async (req, res, next) => {
+  try {
+    const schoolId = await guardSchool(req, res)
+    if (!schoolId) return
+    const q = String(req.query?.q || '').trim().slice(0, 80)
+    if (!q) return res.json({ results: [] })
+
+    const like = `%${q.toLowerCase()}%`
+    const [enrolled, linked] = await Promise.all([
+      all(
+        `SELECT e.id AS enrollment_id, e.student_id, e.email, e.status, e.invite_action, e.course_id, e.room_id, e.user_id,
+                u.name, u.email AS user_email,
+                c.name AS course_name, r.name AS room_name
+         FROM enrollments e
+         LEFT JOIN users u ON u.id = e.user_id
+         LEFT JOIN school_courses c ON c.id = e.course_id
+         LEFT JOIN school_rooms r ON r.id = e.room_id
+         WHERE e.school_id = ?
+           AND (lower(e.student_id) LIKE ? OR lower(ifnull(e.email,'')) LIKE ? OR lower(ifnull(u.name,'')) LIKE ? OR lower(ifnull(u.email,'')) LIKE ? OR lower(ifnull(e.name,'')) LIKE ?)
+         ORDER BY e.created_at DESC LIMIT 25`,
+        schoolId, like, like, like, like, like
+      ),
+      all(
+        `SELECT NULL AS enrollment_id, ap.student_id, u.email, NULL AS status, '' AS invite_action, NULL AS course_id, NULL AS room_id, u.id AS user_id,
+                u.name, u.email AS user_email, '' AS course_name, '' AS room_name
+         FROM users u JOIN applicant_profiles ap ON ap.user_id = u.id
+         WHERE ap.school_id = ? AND u.role = 'applicant'
+           AND u.id NOT IN (SELECT user_id FROM enrollments WHERE school_id = ? AND user_id IS NOT NULL)
+           AND (lower(ap.student_id) LIKE ? OR lower(u.name) LIKE ? OR lower(u.email) LIKE ?)
+         ORDER BY u.name LIMIT 25`,
+        schoolId, schoolId, like, like, like
+      )
+    ])
+
+    const seen = new Set()
+    const results = [...enrolled, ...linked].filter((r) => {
+      const key = r.enrollment_id ? `e${r.enrollment_id}` : `u${r.user_id}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    res.json({ results })
   } catch (err) { next(err) }
 })
 
@@ -294,53 +358,62 @@ router.post('/enrollments', requireAuth, requireRole('school'), async (req, res,
     if (!schoolId) return
     const studentId = String(req.body?.studentId || '').trim()
     if (!studentId) return res.status(400).json({ error: 'Student ID is required' })
-    const courseId = Number(req.body?.courseId)
-    const roomId = Number(req.body?.roomId)
-    if (!courseId || !roomId) return res.status(400).json({ error: 'Pick a course and a room for this student' })
-    const cr = await getCourseRoom(schoolId, courseId, roomId)
-    if (cr.error) return res.status(400).json({ error: cr.error })
+    const email = String(req.body?.email || '').trim().toLowerCase()
+    if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address for the student' })
+    const courseId = req.body?.courseId ? Number(req.body.courseId) : null
+    const roomId = req.body?.roomId ? Number(req.body.roomId) : null
+    if (courseId || roomId) {
+      const cr = await getCourseRoom(schoolId, courseId, roomId)
+      if (cr.error) return res.status(400).json({ error: cr.error })
+    }
 
     const existing = await get(
       `SELECT e.*, s.name AS school_name FROM enrollments e JOIN schools s ON s.id = e.school_id
-       WHERE lower(e.student_id) = lower(?) LIMIT 1`,
-      studentId
+       WHERE lower(e.student_id) = lower(?) OR lower(e.email) = ? LIMIT 1`,
+      studentId,
+      email
     )
     if (existing) {
-      if (existing.school_id === schoolId) {
-        return res.status(400).json({ error: 'That Student ID is already listed in your school — update or remove the existing entry instead' })
+      if (existing.school_id !== schoolId) {
+        return res.status(400).json({ error: `That student already belongs to ${existing.school_name}. A student can only be tracked by one school.` })
       }
-      return res.status(400).json({ error: `That Student ID already belongs to ${existing.school_name}. A student can only be tracked by one school.` })
+      if (existing.invite_action === 'declined') {
+        await run("UPDATE enrollments SET status='invited', invite_action='', course_id=?, room_id=? WHERE id = ?", courseId, roomId, existing.id)
+        const school = await get('SELECT name FROM schools WHERE id = ?', schoolId)
+        await sendInviteEmail({ to: email, studentId, schoolName: school?.name || 'your school' })
+        return res.json({ enrollment_id: existing.id, placed: false, message: 'Re-invited — the student will be asked to accept again.' })
+      }
+      return res.status(400).json({ error: `That student's ID or email is already listed in your school — remove or wait for their response.` })
     }
 
     const matched = await get(
-      `SELECT u.id, u.name, ap.school_id FROM users u JOIN applicant_profiles ap ON ap.user_id = u.id
-       WHERE u.role = 'applicant' AND lower(ap.student_id) = lower(?) LIMIT 1`,
-      studentId
+      `SELECT u.id AS user_id, u.name, u.email AS user_email, ap.school_id FROM users u JOIN applicant_profiles ap ON ap.user_id = u.id
+       WHERE u.role = 'applicant' AND (lower(ap.student_id) = lower(?) OR lower(u.email) = ?) LIMIT 1`,
+      studentId,
+      email
     )
-    if (matched && matched.school_id && matched.school_id !== schoolId) {
-      const other = await get('SELECT name FROM schools WHERE id = ?', matched.school_id)
-      return res.status(400).json({ error: `That student already belongs to ${other?.name || 'another school'}. A student can only be tracked by one school.` })
-    }
 
     const nameHint = String(req.body?.name || matched?.name || '').trim()
     const id = await run(
-      `INSERT INTO enrollments (school_id, course_id, room_id, user_id, student_id, name, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO enrollments (school_id, course_id, room_id, user_id, student_id, email, name, status, invite_action)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'invited', '')`,
       schoolId,
       courseId,
       roomId,
       matched?.user_id ?? null,
       studentId,
-      nameHint,
-      matched ? 'active' : 'invited'
+      email,
+      nameHint
     )
-    if (matched) {
-      if (!matched.school_id) await run('UPDATE applicant_profiles SET school_id = ? WHERE user_id = ?', schoolId, matched.user_id)
-    }
+    const school = await get('SELECT name FROM schools WHERE id = ?', schoolId)
+    await sendInviteEmail({ to: email, studentId, schoolName: school?.name || 'your school' })
     res.status(201).json({
       enrollment_id: id,
-      placed: !!matched,
-      message: matched ? `${matched.name} was found by that Student ID and placed in this course/room.` : 'Added — waiting for the student to register with this Student ID.'
+      placed: matched?.user_id ? true : false,
+      registered: !!matched?.user_id,
+      message: matched?.user_id
+        ? `${matched.name} is already registered — an invitation is waiting for them to accept in the app.`
+        : `Invitation sent to ${email} — they must accept it before you can assign a course and room.`
     })
   } catch (err) { next(err) }
 })
@@ -360,8 +433,9 @@ router.post('/enrollments/place', requireAuth, requireRole('school'), async (req
     if (enrollmentId) {
       const e = await get('SELECT * FROM enrollments WHERE id = ? AND school_id = ?', enrollmentId, schoolId)
       if (!e) return res.status(404).json({ error: 'Enrollment not found' })
-      await run('UPDATE enrollments SET course_id = ?, room_id = ? WHERE id = ?', courseId, roomId, e.id)
-      return res.json({ ok: true, message: 'Student moved into the selected course/room.' })
+      await run("UPDATE enrollments SET course_id = ?, room_id = ?, status = 'active', invite_action = '' WHERE id = ?", courseId, roomId, e.id)
+      if (e.user_id) await run('UPDATE applicant_profiles SET school_id = ? WHERE user_id = ? AND school_id IS NULL', schoolId, e.user_id)
+      return res.json({ ok: true, message: 'Student placed in the selected course/room.' })
     }
     if (userId) {
       const ap = await get('SELECT * FROM applicant_profiles WHERE user_id = ?', userId)
@@ -376,11 +450,11 @@ router.post('/enrollments/place', requireAuth, requireRole('school'), async (req
       const sid = String(ap.student_id || `SID-${userId}`).trim()
       const dupSid = await get('SELECT id FROM enrollments WHERE lower(student_id) = lower(?) LIMIT 1', sid)
       if (dupSid) return res.status(400).json({ error: 'Student ID is already tracked by another school' })
-      const appRow = await get('SELECT name FROM users WHERE id = ?', userId)
+      const appRow = await get('SELECT name, email FROM users WHERE id = ?', userId)
       await run(
-        `INSERT INTO enrollments (school_id, course_id, room_id, user_id, student_id, name, status)
-         VALUES (?, ?, ?, ?, ?, ?, 'active')`,
-        schoolId, courseId, roomId, userId, sid, appRow?.name || ''
+        `INSERT INTO enrollments (school_id, course_id, room_id, user_id, student_id, email, name, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
+        schoolId, courseId, roomId, userId, sid, appRow?.email || '', appRow?.name || ''
       )
       return res.status(201).json({ ok: true, message: 'Student placed in the selected course/room.' })
     }
@@ -394,6 +468,81 @@ router.delete('/enrollments/:id', requireAuth, requireRole('school'), async (req
     if (!schoolId) return
     const result = await run('DELETE FROM enrollments WHERE id = ? AND school_id = ?', Number(req.params.id), schoolId)
     res.json({ ok: true })
+  } catch (err) { next(err) }
+})
+
+router.post('/enrollments/:id/reinvite', requireAuth, requireRole('school'), async (req, res, next) => {
+  try {
+    const schoolId = await guardSchool(req, res)
+    if (!schoolId) return
+    const id = Number(req.params.id)
+    const e = await get('SELECT * FROM enrollments WHERE id = ? AND school_id = ?', id, schoolId)
+    if (!e) return res.status(404).json({ error: 'Invitation not found' })
+    await run("UPDATE enrollments SET status = 'invited', invite_action = '' WHERE id = ?", id)
+    const school = await get('SELECT name FROM schools WHERE id = ?', schoolId)
+    await sendInviteEmail({ to: e.email, studentId: e.student_id, schoolName: school?.name || 'your school' })
+    res.json({ ok: true, message: 'Invitation re-sent — the student can accept again.' })
+  } catch (err) { next(err) }
+})
+
+router.get('/enrollments/invites', requireAuth, requireRole('applicant'), async (req, res, next) => {
+  try {
+    const ap = await get('SELECT student_id FROM applicant_profiles WHERE user_id = ?', req.user.id)
+    const sid = String(ap?.student_id || '').trim()
+    const email = String(req.user.email || '').trim().toLowerCase()
+    const conds = ['e.user_id = ?']
+    const params = [req.user.id]
+    if (email) { conds.push('lower(e.email) = ?'); params.push(email) }
+    if (sid) { conds.push('lower(e.student_id) = lower(?)'); params.push(sid) }
+    const invites = await all(
+      `SELECT e.id, e.student_id, e.created_at, s.id AS school_id, s.name AS school_name, s.logo
+       FROM enrollments e
+       JOIN schools s ON s.id = e.school_id
+       WHERE e.status = 'invited' AND e.invite_action = ''
+         AND (${conds.join(' OR ')})
+       ORDER BY e.created_at DESC`,
+      ...params
+    )
+    res.json({ invites })
+  } catch (err) { next(err) }
+})
+
+router.post('/enrollments/invites/:id/accept', requireAuth, requireRole('applicant'), async (req, res, next) => {
+  try {
+    const id = Number(req.params.id)
+    const ap = await get('SELECT student_id FROM applicant_profiles WHERE user_id = ?', req.user.id)
+    const sid = String(ap?.student_id || '').trim()
+    const email = String(req.user.email || '').trim().toLowerCase()
+    const e = await get(
+      `SELECT e.* FROM enrollments e
+       WHERE e.id = ? AND e.status = 'invited' AND e.invite_action = ''
+         AND (e.user_id = ? OR lower(e.email) = ? OR (lower(e.student_id) = lower(?) AND ? <> ''))
+       LIMIT 1`,
+      id, req.user.id, email, sid, sid
+    )
+    if (!e) return res.status(404).json({ error: 'Invitation not found or already answered' })
+    await run("UPDATE enrollments SET invite_action = 'accepted', user_id = ? WHERE id = ?", req.user.id, id)
+    await run('UPDATE applicant_profiles SET school_id = ? WHERE user_id = ?', e.school_id, req.user.id)
+    res.json({ ok: true, message: 'Invitation accepted — your school will now place you in a course and room.' })
+  } catch (err) { next(err) }
+})
+
+router.post('/enrollments/invites/:id/decline', requireAuth, requireRole('applicant'), async (req, res, next) => {
+  try {
+    const id = Number(req.params.id)
+    const ap = await get('SELECT student_id FROM applicant_profiles WHERE user_id = ?', req.user.id)
+    const sid = String(ap?.student_id || '').trim()
+    const email = String(req.user.email || '').trim().toLowerCase()
+    const e = await get(
+      `SELECT e.* FROM enrollments e
+       WHERE e.id = ? AND e.status = 'invited' AND e.invite_action = ''
+         AND (e.user_id = ? OR lower(e.email) = ? OR (lower(e.student_id) = lower(?) AND ? <> ''))
+       LIMIT 1`,
+      id, req.user.id, email, sid, sid
+    )
+    if (!e) return res.status(404).json({ error: 'Invitation not found or already answered' })
+    await run("UPDATE enrollments SET invite_action = 'declined', user_id = ? WHERE id = ?", req.user.id, id)
+    res.json({ ok: true, message: 'Invitation declined.' })
   } catch (err) { next(err) }
 })
 

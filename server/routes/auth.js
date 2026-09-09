@@ -2,7 +2,7 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import fs from 'node:fs'
 import path from 'node:path'
-import { get, run, UPLOADS_DIR, COURSES, YEAR_LEVELS } from '../db.js'
+import { get, run, transaction, UPLOADS_DIR, COURSES, YEAR_LEVELS } from '../db.js'
 import { signToken, requireAuth, requireRole } from '../middleware/auth.js'
 import { upload } from '../middleware/upload.js'
 import { profileFor, findOrCreateSchool } from '../services/users.js'
@@ -33,6 +33,11 @@ router.post('/register', async (req, res, next) => {
       return res.status(403).json({ error: 'Self-registration is for applicants only. Companies and schools are created by an administrator.' })
     }
 
+    const rawPhone = String(phone || '').trim().replace(/[\s\-]/g, '')
+    if (!/^(09\d{9}|\+?639\d{9})$/.test(rawPhone)) {
+      return res.status(400).json({ error: 'Provide a valid Philippine contact number (e.g. 0917 123 4567)' })
+    }
+
     const uname = String(username || '').trim()
     if (uname.length < 3) return res.status(400).json({ error: 'Username must be at least 3 characters' })
     if (!/^[a-zA-Z0-9_.-]+$/.test(uname)) return res.status(400).json({ error: 'Username can only contain letters, numbers, dots, dashes and underscores' })
@@ -41,38 +46,43 @@ router.post('/register', async (req, res, next) => {
     if (await usernameTaken(uname)) return res.status(409).json({ error: 'That username is already taken' })
 
     const hash = await bcrypt.hash(password, 10)
-    const id = await run(
-      'INSERT INTO users (name, email, username, password_hash, role, phone, address, birthdate, gender) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      name.trim(),
-      email.trim().toLowerCase(),
-      uname,
-      hash,
-      role,
-      String(phone || '').trim(),
-      String(address || '').trim(),
-      String(birthdate || '').trim(),
-      String(gender || '').trim()
-    )
 
-    let school = null
-    if (schoolId) {
-      school = await get('SELECT * FROM schools WHERE id = ?', schoolId)
-    } else if (schoolName) {
-      school = await findOrCreateSchool(schoolName)
-    }
-    await run(
-      'INSERT INTO applicant_profiles (user_id, school_id, course, year_level, student_id, phone) VALUES (?, ?, ?, ?, ?, ?)',
-      id,
-      school?.id ?? null,
-      course && course.trim() ? course.trim() : '',
-      YEAR_LEVELS.includes(yearLevel) ? yearLevel : '',
-      String(studentId || '').trim(),
-      String(phone || '').trim()
-    )
+    const { id } = await transaction(async (tx) => {
+      const id = await tx.run(
+        'INSERT INTO users (name, email, username, password_hash, role, phone, address, birthdate, gender) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        name.trim(),
+        email.trim().toLowerCase(),
+        uname,
+        hash,
+        role,
+        String(phone || '').trim(),
+        String(address || '').trim(),
+        String(birthdate || '').trim(),
+        String(gender || '').trim()
+      )
 
-    if (studentId) {
+      let school = null
+      if (schoolId) {
+        school = await tx.get('SELECT * FROM schools WHERE id = ?', schoolId)
+      } else if (schoolName) {
+        school = await findOrCreateSchool(schoolName)
+      }
+      await tx.run(
+        'INSERT INTO applicant_profiles (user_id, school_id, course, year_level, student_id, phone) VALUES (?, ?, ?, ?, ?, ?)',
+        id,
+        school?.id ?? null,
+        course && course.trim() ? course.trim() : '',
+        YEAR_LEVELS.includes(yearLevel) ? yearLevel : '',
+        String(studentId || '').trim(),
+        String(phone || '').trim()
+      )
+
+      return { id }
+    })
+
+    if (studentId || email) {
       try {
-        await matchEnrollmentByStudentId(id, studentId)
+        await matchEnrollmentByStudentId(id, studentId, email)
       } catch {}
     }
 
@@ -103,6 +113,34 @@ router.get('/me', requireAuth, async (req, res) => {
   const user = await get('SELECT * FROM users WHERE id = ?', req.user.id)
   if (!user) return res.status(401).json({ error: 'Account not found' })
   res.json(await profileFor(user))
+})
+
+router.put('/password', requireAuth, async (req, res, next) => {
+  try {
+    const user = await get('SELECT * FROM users WHERE id = ?', req.user.id)
+    if (!user) return res.status(401).json({ error: 'Account not found' })
+
+    const newPassword = String(req.body?.newPassword || '')
+    if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' })
+
+    const mustChange = !!Number(user.must_change_password)
+    if (!mustChange) {
+      const currentPassword = String(req.body?.currentPassword || '')
+      const ok = await bcrypt.compare(currentPassword, user.password_hash)
+      if (!ok) return res.status(401).json({ error: 'Current password is incorrect' })
+    }
+
+    const same = await bcrypt.compare(newPassword, user.password_hash)
+    if (same) return res.status(400).json({ error: 'New password must be different from your current password' })
+
+    const hash = await bcrypt.hash(newPassword, 10)
+    await run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', hash, user.id)
+
+    const updated = await get('SELECT * FROM users WHERE id = ?', user.id)
+    res.json({ ok: true, user: await profileFor(updated) })
+  } catch (err) {
+    next(err)
+  }
 })
 
 router.put(
@@ -184,7 +222,7 @@ router.put('/profile', requireAuth, async (req, res) => {
     const newStudentId = String(p.studentId ?? prevStudentId).trim()
 
     await run(
-      `UPDATE applicant_profiles SET school_id=?, course=?, year_level=?, student_id=?, phone=?, search_city=?, search_lat=?, search_lng=? WHERE user_id=?`,
+      `UPDATE applicant_profiles SET school_id=?, course=?, year_level=?, student_id=?, phone=?, search_city=?, search_lat=?, search_lng=?, search_radius=? WHERE user_id=?`,
       schoolId,
       course,
       yearLevel,
@@ -193,6 +231,7 @@ router.put('/profile', requireAuth, async (req, res) => {
       String(p.searchCity ?? '').trim(),
       p.searchLat != null ? Number(p.searchLat) : null,
       p.searchLng != null ? Number(p.searchLng) : null,
+      p.searchRadius != null && Number(p.searchRadius) > 0 ? Math.min(Number(p.searchRadius), 100) : 25,
       user.id
     )
 

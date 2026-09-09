@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
 import { api, fmtDate } from '../../api.js'
 import { Spinner, StatusBadge, Timeline, emptyState } from '../../components/ui.jsx'
+import ChatBox from '../../components/ChatBox.jsx'
 import { useConfirm } from '../../confirm.jsx'
 import { toast } from '../../toast.jsx'
 
@@ -98,6 +99,16 @@ export default function StudentDetail() {
             ) : (
               emptyState('No applications yet', 'This student has not applied to any company yet.')
             )}
+          </div>
+
+          <div className="card card-pad mt">
+            <div className="section-head">
+              <div>
+                <h3>💬 Chat with {stu.name.split(' ')[0] || stu.name}</h3>
+                <span className="muted small">Send follow-up requests — documents, reminders, or updates.</span>
+              </div>
+            </div>
+            <ChatBox thread={{ type: 'school', studentId: Number(id) }} title={stu.name} />
           </div>
         </div>
 
