@@ -7,7 +7,7 @@ const router = Router()
 
 router.use(requireAuth)
 
-function loadCtx(applicationId) {
+async function loadCtx(applicationId) {
   return get(
     `SELECT a.*, p.company_id, a.applicant_id FROM applications a
      JOIN postings p ON p.id = a.posting_id WHERE a.id = ?`,
@@ -15,8 +15,8 @@ function loadCtx(applicationId) {
   )
 }
 
-router.use('/:applicationId', (req, res, next) => {
-  const ctx = loadCtx(req.params.applicationId)
+router.use('/:applicationId', async (req, res, next) => {
+  const ctx = await loadCtx(req.params.applicationId)
   if (!ctx) return res.status(404).json({ error: 'Application not found' })
 
   const isApplicant = ctx.applicant_id === req.user.id
@@ -36,12 +36,12 @@ function emitNewMessage(req, message) {
   if (io) io.to(`app-${req.appCtx.id}`).emit('message:new', serializeMessage(message))
 }
 
-router.get('/:applicationId', (req, res) => {
-  const messages = all(
+router.get('/:applicationId', async (req, res) => {
+  const messages = await all(
     'SELECT * FROM messages WHERE application_id = ? ORDER BY id ASC',
     req.params.applicationId
   )
-  run(
+  await run(
     'UPDATE messages SET is_read = 1 WHERE application_id = ? AND sender_id != ?',
     req.params.applicationId,
     req.user.id
@@ -49,17 +49,17 @@ router.get('/:applicationId', (req, res) => {
   res.json(messages.map(serializeMessage))
 })
 
-router.post('/:applicationId', (req, res) => {
+router.post('/:applicationId', async (req, res) => {
   const content = String(req.body?.content || '').trim()
   if (!content) return res.status(400).json({ error: 'Message is empty' })
-  const id = run(
+  const id = await run(
     'INSERT INTO messages (application_id, sender_id, sender_role, content) VALUES (?, ?, ?, ?)',
     req.params.applicationId,
     req.user.id,
     req.user.role,
     content
   )
-  const message = get('SELECT * FROM messages WHERE id = ?', id)
+  const message = await get('SELECT * FROM messages WHERE id = ?', id)
   emitNewMessage(req, message)
   res.status(201).json(serializeMessage(message))
 })
@@ -67,11 +67,11 @@ router.post('/:applicationId', (req, res) => {
 router.post(
   '/:applicationId/upload',
   upload.single('file'),
-  (req, res) => {
+  async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file received' })
     const content = String(req.body?.content || '').trim()
 
-    const id = run(
+    const id = await run(
       `INSERT INTO messages (application_id, sender_id, sender_role, content, file_name, file_path, file_mime, file_size)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       req.params.applicationId,
@@ -83,7 +83,7 @@ router.post(
       req.file.mimetype,
       req.file.size
     )
-    const message = get('SELECT * FROM messages WHERE id = ?', id)
+    const message = await get('SELECT * FROM messages WHERE id = ?', id)
     emitNewMessage(req, message)
     res.status(201).json(serializeMessage(message))
   },
@@ -93,8 +93,8 @@ router.post(
   }
 )
 
-router.post('/:applicationId/seen', (req, res) => {
-  run('UPDATE messages SET is_read = 1 WHERE application_id = ? AND sender_id != ?', req.params.applicationId, req.user.id)
+router.post('/:applicationId/seen', async (req, res) => {
+  await run('UPDATE messages SET is_read = 1 WHERE application_id = ? AND sender_id != ?', req.params.applicationId, req.user.id)
   res.json({ ok: true })
 })
 

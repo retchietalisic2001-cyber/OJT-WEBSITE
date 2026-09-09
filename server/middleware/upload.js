@@ -16,22 +16,26 @@ const ALLOWED_MIME = new Set([
   'text/plain'
 ])
 
-export const upload = multer({
-  storage: multer.diskStorage({
-    destination: UPLOADS_DIR,
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase().slice(0, 10)
-      const key = crypto.randomBytes(6).toString('hex')
-      cb(null, `${Date.now()}_${key}${ext}`)
+export function uploadFor(maxBytes) {
+  return multer({
+    storage: multer.diskStorage({
+      destination: UPLOADS_DIR,
+      filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase().slice(0, 10)
+        const key = crypto.randomBytes(6).toString('hex')
+        cb(null, `${Date.now()}_${key}${ext}`)
+      }
+    }),
+    limits: { fileSize: maxBytes },
+    fileFilter: (req, file, cb) => {
+      const ok = ALLOWED_MIME.has(file.mimetype)
+      if (ok) return cb(null, true)
+      cb(new Error('Only images, PDF, Word, Excel and text files are allowed'))
     }
-  }),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const ok = ALLOWED_MIME.has(file.mimetype)
-    if (ok) return cb(null, true)
-    cb(new Error('Only images, PDF, Word, Excel and text files are allowed'))
-  }
-})
+  })
+}
+
+export const upload = uploadFor(10 * 1024 * 1024)
 
 export function mimeCategory(mime) {
   if (!mime) return 'file'

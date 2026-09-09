@@ -148,7 +148,10 @@ export function JobCard({ p, to, extra }) {
         <div className="job-logo">{p.company_name?.charAt(0).toUpperCase()}</div>
         <div className="job-title-wrap">
           <h3>{p.title}</h3>
-          <span className="muted">{p.company_name}{p.city ? ` — ${p.city}` : ''}</span>
+          <span className="muted">
+            {p.company_name}{p.city ? ` — ${p.city}` : ''}
+            {p.is_verified && <span className="verified-chip" title="Verified company">✓ Verified</span>}
+          </span>
         </div>
         {p.distance_km != null && <span className="dist-chip">{p.distance_km.toFixed(1)} km</span>}
       </div>

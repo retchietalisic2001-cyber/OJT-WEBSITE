@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { api, fmtDate } from '../../api.js'
 import { Spinner, StatusBadge, StatusStepper, Timeline } from '../../components/ui.jsx'
 import ChatBox from '../../components/ChatBox.jsx'
@@ -13,9 +14,17 @@ const QUICK = [
   { status: 'rejected', label: 'Reject' }
 ]
 
+const STATUS_CONFIRM = {
+  under_review: { title: 'Mark as reviewing?', message: (n, t) => `${n}'s application for "${t}" will be marked "Under review".` },
+  interview: { title: 'Invite to interview?', message: (n, t) => `${n} will be invited to an interview for "${t}".` },
+  accepted: { title: 'Accept this applicant?', message: (n, t) => `${n} will be marked as ACCEPTED intern for "${t}".`, confirm: 'Accept' },
+  rejected: { title: 'Decline this applicant?', message: () => '', confirm: 'Decline' }
+}
+
 export default function CompanyApplicationDetail() {
   const { id } = useParams()
   const { token } = useAuth()
+  const confirm = useConfirm()
   const [app, setApp] = useState(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -27,12 +36,29 @@ export default function CompanyApplicationDetail() {
   if (!app) return <Spinner />
 
   const setStatus = async (status, customNote = '') => {
+    let declineReason = ''
+    if (status === 'rejected') {
+      declineReason = window.prompt('Reason for declining this applicant (required):', '')
+      if (declineReason == null) return
+      declineReason = declineReason.trim()
+      if (!declineReason) return toast.error('A reason is required — type why you are declining this application')
+    }
+    const cfg = STATUS_CONFIRM[status] || { title: `Change status to ${status}?`, message: () => 'The applicant will see this update.' }
+    const ok = await confirm({
+      title: cfg.title,
+      message: status === 'rejected'
+        ? `You will DECLINE ${app.applicant_name} for "${app.posting_title}" with the reason:\n"${declineReason}"`
+        : cfg.message(app.applicant_name, app.posting_title),
+      confirmLabel: cfg.confirm || 'Update status',
+      danger: status === 'rejected'
+    })
+    if (!ok) return
     setBusy(true)
     try {
       const updated = await api(`/applications/${id}/status`, {
         method: 'PUT',
         token,
-        body: { status, note: customNote || note }
+        body: { status, note: declineReason || customNote || note }
       })
       setApp(updated)
       setNote('')
@@ -96,6 +122,19 @@ export default function CompanyApplicationDetail() {
         </div>
 
         <div className="detail-side">
+          <div className="card card-pad">
+            <div className="section-head">
+              <h3>📄 Resume</h3>
+            </div>
+            {app.resume_path ? (
+              <>
+                <p className="muted small">{app.resume_name || 'Resume'} — attached with the application.</p>
+                <a className="btn btn-primary btn-block" href={app.resume_path} target="_blank" rel="noreferrer">View resume</a>
+              </>
+            ) : (
+              <p className="muted small">The applicant hasn't attached a resume yet. You can ask for one in the chat below.</p>
+            )}
+          </div>
           <div className="card card-pad">
             <h3>Applicant details</h3>
             <table className="mini-table">

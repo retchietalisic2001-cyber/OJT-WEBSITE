@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { api, fmtDate } from '../../api.js'
 import { Spinner, CourseBadge, StatusBadge, Modal, emptyState } from '../../components/ui.jsx'
 import MapView from '../../components/MapView.jsx'
@@ -10,6 +11,7 @@ export default function PostingDetail() {
   const { id } = useParams()
   const { token, user } = useAuth()
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const [posting, setPosting] = useState(null)
   const [cover, setCover] = useState('')
   const [modal, setModal] = useState(false)
@@ -26,10 +28,23 @@ export default function PostingDetail() {
   const alreadyApplied = !!posting.applied_status
 
   const apply = async () => {
+    const ok = await confirm({
+      title: 'Submit application?',
+      message: `You're applying for "${posting.title}" at ${posting.company_name}. You can withdraw your application later from My Applications.`,
+      confirmLabel: 'Submit application',
+      danger: false
+    })
+    if (!ok) return
     setApplying(true)
     try {
-      await api('/applications', { method: 'POST', token, body: { posting_id: posting.id, cover_message: cover } })
-      toast.success('Application submitted! Track it under My Applications.')
+      const created = await api('/applications', { method: 'POST', token, body: { posting_id: posting.id, cover_message: cover } })
+      if (created.resume_missing) {
+        toast.success('Application submitted! Tip: build your resume in the Resume Builder so it is attached to your applications.')
+      } else if (created.resume_attached) {
+        toast.success('Application submitted! Your resume was attached automatically for the company to review.')
+      } else {
+        toast.success('Application submitted! Track it under My Applications.')
+      }
       setModal(false)
       setPosting({ ...posting, applied_status: 'submitted' })
     } catch (e) {
@@ -50,7 +65,10 @@ export default function PostingDetail() {
               <div className="job-logo lg">{posting.company_name?.charAt(0).toUpperCase()}</div>
               <div className="job-title-wrap">
                 <h1>{posting.title}</h1>
-                <span className="muted">{posting.company_name} · {posting.industry}</span>
+                <span className="muted">
+                  {posting.company_name} · {posting.industry}
+                  {posting.is_verified && <span className="verified-chip" title="Verified company">✓ Verified</span>}
+                </span>
                 <span className="muted">📍 {posting.address}</span>
               </div>
             </div>
@@ -119,7 +137,7 @@ export default function PostingDetail() {
             onChange={(e) => setCover(e.target.value)}
           />
         </label>
-        <p className="muted small">You'll be able to send your resume and documents through the chat right after applying — no need to visit the office.</p>
+        <p className="muted small">Your saved resume (from the Resume Builder) is attached automatically with your application. You can send more documents through the chat after applying.</p>
         <button className="btn btn-primary btn-block" onClick={apply} disabled={applying}>
           {applying ? 'Submitting…' : 'Submit application'}
         </button>

@@ -1,7 +1,11 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { useEffect } from 'react'
 import { useAuth, roleHome } from './store.jsx'
+import { ConfirmProvider } from './confirm.jsx'
 import AuthPage from './pages/AuthPage.jsx'
 import Layout from './components/Layout.jsx'
+import SupportWidget from './components/SupportWidget.jsx'
+import { startAdminPresence } from './socket.js'
 
 import ApplicantHome from './pages/applicant/ApplicantHome.jsx'
 import Browse from './pages/applicant/Browse.jsx'
@@ -19,6 +23,7 @@ import CompanyApplications from './pages/company/CompanyApplications.jsx'
 
 import SchoolHome from './pages/school/SchoolHome.jsx'
 import StudentDetail from './pages/school/StudentDetail.jsx'
+import AdminDashboard from './pages/admin/AdminDashboard.jsx'
 
 function Guard({ role, children }) {
   const { user, ready } = useAuth()
@@ -34,9 +39,20 @@ function HomeRedirect() {
   return <Navigate to={user ? roleHome(user.role) : '/login'} replace />
 }
 
+function AdminPresence() {
+  const { user, token } = useAuth()
+  useEffect(() => {
+    if (user?.role === 'admin' && token) startAdminPresence(token)
+  }, [user?.role, token])
+  return null
+}
+
 export default function App() {
+  const { user } = useAuth()
   return (
-    <Routes>
+    <ConfirmProvider>
+      <AdminPresence />
+      <Routes>
       <Route path="/" element={<HomeRedirect />} />
       <Route path="/login" element={<AuthPage />} />
 
@@ -66,7 +82,14 @@ export default function App() {
         <Route path="profile" element={<ProfilePage />} />
       </Route>
 
+      <Route path="/admin" element={<Guard role="admin"><Layout /></Guard>}>
+        <Route index element={<AdminDashboard />} />
+        <Route path="profile" element={<ProfilePage />} />
+      </Route>
+
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+      {!user && <SupportWidget />}
+    </ConfirmProvider>
   )
 }

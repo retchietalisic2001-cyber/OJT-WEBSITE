@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "OJT Connect — an OJT application platform connecting schools, OJT applicants, and companies.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "dev": "concurrently -n server,client -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node --watch server/index.js",
@@ -14,9 +17,16 @@
   "dependencies": {
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.3.0",
+    "mysql2": "^3.24.4",
+    "nodemailer": "^10.0.1",
+    "passport": "^0.7.0",
+    "passport-facebook": "^3.0.0",
+    "passport-google-oauth20": "^2.0.0",
+    "passport-openidconnect": "^0.1.2",
     "pdfkit": "^0.15.2",
     "socket.io": "^4.8.1"
   },

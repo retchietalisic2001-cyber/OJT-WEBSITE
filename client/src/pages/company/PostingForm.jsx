@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { api } from '../../api.js'
 import { Spinner } from '../../components/ui.jsx'
 import LocationPicker from '../../components/LocationPicker.jsx'
@@ -12,7 +13,9 @@ export default function PostingForm() {
   const isEdit = !!id
   const { token } = useAuth()
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const [loadingEdit, setLoadingEdit] = useState(isEdit)
+  const [verify, setVerify] = useState(null)
 
   const [form, setForm] = useState({
     title: '',
@@ -46,7 +49,31 @@ export default function PostingForm() {
       .catch((e) => toast.error(e.message))
   }, [id, isEdit, token])
 
+  useEffect(() => {
+    api('/verify/status', { token }).then(setVerify).catch(() => {})
+  }, [token])
+
   if (loadingEdit) return <Spinner />
+
+  if (verify && !verify.verified) {
+    return (
+      <div className="page">
+        <Link className="back-link" to="/company">← Dashboard</Link>
+        <div className="card card-pad">
+          <div className="empty-state">
+            <div className="empty-emoji">🔒</div>
+            <h3>Verification required</h3>
+            <p>
+              Your company must be verified before you can {isEdit ? 'edit' : 'post'} OJT openings.
+              Upload a valid ID and your credentials/papers (SEC/DTI registration, permits) on your profile
+              to prevent false applications.
+            </p>
+            <Link className="btn btn-primary" to="/company/profile">Go to verification</Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -68,6 +95,16 @@ export default function PostingForm() {
     if (!form.title.trim()) return toast.error('Add a title')
     if (!form.course_tags.length) return toast.error('Select at least one course')
     if (form.lat == null || form.lng == null) return toast.error('Set the office location on the map')
+
+    const ok = await confirm({
+      title: isEdit ? 'Save changes?' : 'Publish posting?',
+      message: isEdit
+        ? `Your changes to "${form.title}" will be saved and shown to all applicants.`
+        : `"${form.title}" will be published and visible to OJT applicants in your area.`,
+      confirmLabel: isEdit ? 'Save changes' : 'Publish posting',
+      danger: false
+    })
+    if (!ok) return
 
     try {
       const body = {

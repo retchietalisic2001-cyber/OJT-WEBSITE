@@ -12,12 +12,24 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let alive = true
     async function load() {
-      if (!token) {
+      let activeToken = localStorage.getItem(KEY)
+      const params = new URLSearchParams(window.location.search)
+      const oauthToken = params.get('token')
+      if (oauthToken) {
+        activeToken = oauthToken
+        localStorage.setItem(KEY, oauthToken)
+        setToken(oauthToken)
+        params.delete('token')
+        params.delete('error')
+        const qs = params.toString()
+        window.history.replaceState({}, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname)
+      }
+      if (!activeToken) {
         setReady(true)
         return
       }
       try {
-        const u = await api('/auth/me', { token })
+        const u = await api('/auth/me', { token: activeToken })
         if (alive) setUser(u)
       } catch {
         localStorage.removeItem(KEY)
@@ -71,5 +83,6 @@ export const useAuth = () => useContext(AuthContext)
 export function roleHome(role) {
   if (role === 'company') return '/company'
   if (role === 'school') return '/school'
+  if (role === 'admin') return '/admin'
   return '/app'
 }

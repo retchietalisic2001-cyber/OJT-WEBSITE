@@ -1,19 +1,25 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { api } from '../../api.js'
 import { Spinner, emptyState, StatCard, StatusBadge, CourseBadge } from '../../components/ui.jsx'
 
 export default function CompanyHome() {
   const { token, user } = useAuth()
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const [postings, setPostings] = useState(null)
+  const [verify, setVerify] = useState(null)
 
   useEffect(() => {
     api('/postings/my', { token }).then(setPostings).catch(() => setPostings([]))
+    api('/verify/status', { token }).then(setVerify).catch(() => {})
   }, [token])
 
   if (!postings) return <Spinner />
+
+  const unverified = verify ? !verify.verified : false
 
   const totalApps = postings.reduce((s, p) => s + (p.applicants_count || 0), 0)
   const totalAccepted = postings.reduce((s, p) => s + (p.accepted_count || 0), 0)
@@ -21,6 +27,12 @@ export default function CompanyHome() {
 
   const toggleStatus = async (p) => {
     const next = p.status === 'open' ? 'closed' : 'open'
+    const ok = await confirm({
+      title: next === 'closed' ? 'Close this posting?' : 'Reopen this posting?',
+      message: `"${p.title}" will be ${next === 'closed' ? 'closed — no new applicants can apply' : 'opened for new applicants again'}.`,
+      confirmLabel: next === 'closed' ? 'Close posting' : 'Reopen'
+    })
+    if (!ok) return
     try {
       await api(`/postings/${p.id}/status`, { method: 'PATCH', token, body: { status: next } })
       setPostings((list) => list.map((x) => (x.id === p.id ? { ...x, status: next } : x)))
@@ -36,8 +48,19 @@ export default function CompanyHome() {
           <h1>{user.profile?.company_name || 'Company'} admin</h1>
           <p className="muted">Post OJT openings and manage applicants all in one place.</p>
         </div>
-        <Link className="btn btn-primary" to="/company/postings/new">+ New posting</Link>
+        {unverified ? (
+          <Link className="btn" to="/company/profile" title="Complete verification to post openings">Verify to post 📄</Link>
+        ) : (
+          <Link className="btn btn-primary" to="/company/postings/new">+ New posting</Link>
+        )}
       </header>
+
+      {unverified && (
+        <div className="verify-banner unverified">
+          ⚠️ Your company isn't verified yet. Upload a valid ID and your credentials/papers (SEC/DTI registration, permits)
+          on your <Link className="link-btn" to="/company/profile">profile</Link> so applicants can trust your postings.
+        </div>
+      )}
 
       <div className="stats-grid">
         <StatCard icon="📋" label="Postings" value={postings.length} accent="#5B4BDB" />
@@ -54,11 +77,17 @@ export default function CompanyHome() {
 
         {postings.length === 0 ? (
           <div className="card card-pad">
-            {emptyState(
-              'No postings yet',
-              'Create your first OJT posting so applicants in your area can find you.',
-              <Link className="btn btn-primary" to="/company/postings/new">Create a posting</Link>
-            )}
+            {unverified
+              ? emptyState(
+                  'No postings yet',
+                  'Verify your company first so you can post trusted OJT openings and get applicants.',
+                  <Link className="btn" to="/company/profile">Verify to post 📄</Link>
+                )
+              : emptyState(
+                  'No postings yet',
+                  'Create your first OJT posting so applicants in your area can find you.',
+                  <Link className="btn btn-primary" to="/company/postings/new">Create a posting</Link>
+                )}
           </div>
         ) : (
           <div className="posting-cards">

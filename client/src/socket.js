@@ -15,3 +15,12 @@ export function closeSocket() {
     socket = null
   }
 }
+
+export function startAdminPresence(token) {
+  const s = getSocket(token)
+  const ping = () => s.emit('presence', { role: 'admin' })
+  ping()
+  s.off('connect', ping)
+  s.on('connect', ping)
+  return s
+}

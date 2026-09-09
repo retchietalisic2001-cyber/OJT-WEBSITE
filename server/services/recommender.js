@@ -1,8 +1,8 @@
 import { all } from '../db.js'
 import { haversineKm } from './geo.js'
 
-export function recommendPostings(profile, limit = 6) {
-  const postings = all(`
+export async function recommendPostings(profile, limit = 6) {
+  const postings = await all(`
     SELECT p.*, c.company_name, c.industry, c.lat AS company_lat, c.lng AS company_lng
     FROM postings p
     JOIN company_profiles c ON c.user_id = p.company_id

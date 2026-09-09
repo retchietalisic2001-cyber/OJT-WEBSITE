@@ -1,5 +1,6 @@
 import { NavLink, Outlet, Link, useNavigate } from 'react-router-dom'
 import { useAuth, roleHome } from '../store.jsx'
+import { useConfirm } from '../confirm.jsx'
 import { closeSocket } from '../socket.js'
 
 const NAV = {
@@ -19,6 +20,10 @@ const NAV = {
   school: [
     { to: '/school', label: 'My Students', icon: 'home' },
     { to: '/school/profile', label: 'School Profile', icon: 'user' }
+  ],
+  admin: [
+    { to: '/admin', label: 'Dashboard', icon: 'home' },
+    { to: '/admin/profile', label: 'My Profile', icon: 'user' }
   ]
 }
 
@@ -40,13 +45,27 @@ function Icon({ name }) {
   )
 }
 
+const PROFILE_PATH = {
+  applicant: '/app/profile',
+  company: '/company/profile',
+  school: '/school/profile',
+  admin: '/admin/profile'
+}
+
 export default function Layout() {
   const { user, token, logout } = useAuth()
   const navigate = useNavigate()
+  const confirm = useConfirm()
   if (!user) return null
   const nav = NAV[user.role] || []
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const ok = await confirm({
+      title: 'Sign out?',
+      message: 'You will need to log in again to manage your account.',
+      confirmLabel: 'Sign out'
+    })
+    if (!ok) return
     closeSocket()
     logout()
     navigate('/login')
@@ -58,7 +77,9 @@ export default function Layout() {
       ? `${user.profile?.course || 'Applicant'}${user.profile?.year_level ? ' • ' + user.profile.year_level : ''}`
       : user.role === 'school'
         ? user.profile?.school_name || 'School Coordinator'
-        : user.profile?.industry || 'Company'
+        : user.role === 'admin'
+          ? 'Administrator'
+          : user.profile?.industry || 'Company'
 
   return (
     <div className="shell">
@@ -81,7 +102,7 @@ export default function Layout() {
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/app' || item.to === '/company' || item.to === '/school'}
+              end={['/app', '/company', '/school', '/admin'].includes(item.to)}
               className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
             >
               <Icon name={item.icon} />
@@ -89,22 +110,21 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
+      </aside>
 
-        <div className="sidebar-foot">
-          <div className="mini-user">
-            <div className="avatar">{displayName.charAt(0).toUpperCase()}</div>
+      <main className="content">
+        <header className="topbar">
+          <Link to={PROFILE_PATH[user.role] || '/app/profile'} className="mini-user top-user" title="My profile">
+            <div className="avatar sm">{displayName.charAt(0).toUpperCase()}</div>
             <div className="mini-user-meta">
               <strong>{displayName}</strong>
               <span>{subtitle}</span>
             </div>
-          </div>
+          </Link>
           <button className="link-btn logout-btn" onClick={handleLogout}>
             <Icon name="logout" /> Sign out
           </button>
-        </div>
-      </aside>
-
-      <main className="content">
+        </header>
         <Outlet context={{ token: token || undefined }} />
       </main>
     </div>

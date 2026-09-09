@@ -1,0 +1,53 @@
+# Render blueprint — deploys OJT Connect as a simple web service.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: ojt-connect
+    runtime: docker
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DB_MODE
+        value: sqlite
+      - key: DATA_DIR
+        value: /data
+      - key: UPLOADS_DIR
+        value: /data/uploads
+      - key: SEED_ON_START
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SERVER_URL
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: YAHOO_CLIENT_ID
+        sync: false
+      - key: YAHOO_CLIENT_SECRET
+        sync: false
+    # NOTE: Render's free plan does NOT support persistent disks.
+    # Without a disk, SQLite data resets on each redeploy — but SEED_ON_START=true
+    # re-seeds demo data automatically, so the app stays usable as a free demo.
+    # For real persistence: upgrade the instance, or set DB_MODE=mysql and point
+    # at an external MySQL host (e.g. a free InfinityFree MySQL database).
+    # disk:
+    #   name: ojt-data
+    #   mountPath: /data
+    #   sizeGB: 1
+    healthCheckPath: /api/health
+    autoDeploy: true

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { api, fmtDate } from '../../api.js'
 import { Spinner, StatusBadge, StatusStepper, Timeline } from '../../components/ui.jsx'
 import ChatBox from '../../components/ChatBox.jsx'
@@ -9,6 +10,7 @@ import { toast } from '../../toast.jsx'
 export default function ApplicationDetail() {
   const { id } = useParams()
   const { token } = useAuth()
+  const confirm = useConfirm()
   const [app, setApp] = useState(null)
   const [attaching, setAttaching] = useState(false)
 
@@ -17,7 +19,12 @@ export default function ApplicationDetail() {
   }, [id, token])
 
   const withdraw = async () => {
-    if (!confirm('Withdraw this application?')) return
+    const ok = await confirm({
+      title: 'Withdraw application?',
+      message: `This will withdraw your application for "${app?.posting_title || 'this role'}". The company will no longer see it in their list.`,
+      confirmLabel: 'Withdraw'
+    })
+    if (!ok) return
     try {
       const updated = await api(`/applications/${id}/withdraw`, { method: 'POST', token })
       setApp(updated)
@@ -28,6 +35,13 @@ export default function ApplicationDetail() {
   }
 
   const attachResume = async () => {
+    const ok = await confirm({
+      title: 'Attach resume?',
+      message: 'Your resume will be sent to the company in this conversation.',
+      confirmLabel: 'Attach resume',
+      danger: false
+    })
+    if (!ok) return
     setAttaching(true)
     try {
       await api(`/resume/applications/${id}/attach-resume`, { method: 'POST', token })

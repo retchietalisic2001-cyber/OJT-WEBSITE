@@ -7,15 +7,34 @@ import { Spinner, StatusBadge, StatCard, emptyState } from '../../components/ui.
 export default function SchoolHome() {
   const { token, user } = useAuth()
   const [data, setData] = useState(null)
+  const [verify, setVerify] = useState(null)
 
   useEffect(() => {
     api('/schools/stats', { token }).then(setData).catch(() => setData({ error: true }))
+    api('/verify/status', { token }).then(setVerify).catch(() => {})
   }, [token])
 
   if (!data) return <Spinner />
+
+  const blockTracking = verify && !verify.verified && verify.pendingCount === 0
+  if (blockTracking) {
+    return (
+      <div className="page">
+        <div className="card card-pad">
+          {emptyState(
+            '🔒 Verification required',
+            "Your school must be verified to track students' OJT progress. Upload a valid ID and your school credentials/papers (CHED permit, registration) on your profile.",
+            <Link className="btn btn-primary" to="/school/profile">Go to verification</Link>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   if (data.error) return <div className="card card-pad">{emptyState('No school linked', 'Link your school in your profile so you can monitor its students.', <Link className="btn btn-primary" to="/school/profile">Link my school</Link>)}</div>
 
   const s = data
+  const unverified = verify ? !verify.verified : false
   return (
     <div className="page">
       <header className="page-head">
@@ -24,6 +43,13 @@ export default function SchoolHome() {
           <p className="muted">See which students have found companies and help those who have not yet applied.</p>
         </div>
       </header>
+
+      {unverified && (
+        <div className="verify-banner unverified">
+          ⚠️ Your school account isn't verified yet. Upload a valid ID and your school credentials/papers (CHED permit, registration)
+          on your <Link className="link-btn" to="/school/profile">profile</Link> to confirm this school is legitimate.
+        </div>
+      )}
 
       <div className="stats-grid">
         <StatCard icon="🧑‍🎓" label="Students tracked" value={s.total_students} accent="#5B4BDB" />

@@ -8,12 +8,29 @@ export default function StudentDetail() {
   const { id } = useParams()
   const { token } = useAuth()
   const [stu, setStu] = useState(null)
+  const [verify, setVerify] = useState(null)
 
   useEffect(() => {
     api(`/schools/students/${id}`, { token }).then(setStu).catch(() => setStu({ error: true }))
+    api('/verify/status', { token }).then(setVerify).catch(() => {})
   }, [id, token])
 
   if (!stu) return <Spinner />
+
+  if (verify && !verify.verified && verify.pendingCount === 0) {
+    return (
+      <div className="page">
+        <div className="card card-pad">
+          {emptyState(
+            '🔒 Verification required',
+            "Your school must be verified to view students' OJT progress. Upload your documents on your profile.",
+            <Link className="btn btn-primary" to="/school/profile">Go to verification</Link>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   if (stu.error) return <div className="card card-pad">{emptyState('Student not found')}</div>
 
   return (

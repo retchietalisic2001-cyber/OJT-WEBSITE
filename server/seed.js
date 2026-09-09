@@ -1,15 +1,47 @@
 import bcrypt from 'bcryptjs'
-import { db, run, get, all } from './db.js'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { db, run, get, initSchema, DB_MODE } from './db.js'
 
 const PASSWORD = 'demo123'
 
-async function main() {
-  console.log('Seeding OJT Connect...')
+export async function ensureAdmin() {
+  const email = (process.env.ADMIN_EMAIL || 'admin@ojtconnect.com').toLowerCase()
+  const password = process.env.ADMIN_PASSWORD || 'admin123'
+  if (await get('SELECT id FROM users WHERE role = ?', 'admin')) return
+  const hash = await bcrypt.hash(password, 10)
+  await run('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)', 'OJT Connect Admin', email, hash, 'admin')
+  console.log(`\n  [admin] Created administrator account: ${email} / ${password}\n  [admin] Please change this password after your first login.\n`)
+}
 
-  db.exec('DELETE FROM messages; DELETE FROM status_history; DELETE FROM applications; DELETE FROM resumes;')
-  db.exec('DELETE FROM postings; DELETE FROM applicant_profiles; DELETE FROM company_profiles; DELETE FROM school_coordinators;')
-  db.exec('DELETE FROM users; DELETE FROM schools;')
-  db.exec("DELETE FROM sqlite_sequence WHERE name IN ('messages','status_history','applications','resumes','postings','applicant_profiles','company_profiles','school_coordinators','users','schools');")
+async function execSql(sql) {
+  if (DB_MODE === 'mysql') {
+    const parts = sql.split(';').map((s) => s.trim()).filter(Boolean)
+    for (const part of parts) {
+      await db.query(part)
+    }
+  } else {
+    db.exec(sql)
+  }
+}
+
+function relDate(sign, num, unit) {
+  if (DB_MODE === 'mysql') {
+    return `DATE_SUB(NOW(), INTERVAL ${num} ${unit})`
+  }
+  return `datetime('now','${sign}${num} ${unit}')`
+}
+
+export async function seedDatabase() {
+  console.log('Seeding OJT Connect...')
+  await initSchema()
+
+  await execSql('DELETE FROM messages; DELETE FROM status_history; DELETE FROM applications; DELETE FROM resumes;')
+  await execSql('DELETE FROM postings; DELETE FROM applicant_profiles; DELETE FROM company_profiles; DELETE FROM school_coordinators;')
+  await execSql('DELETE FROM users; DELETE FROM schools;')
+  if (DB_MODE === 'sqlite') {
+    db.exec("DELETE FROM sqlite_sequence WHERE name IN ('messages','status_history','applications','resumes','postings','applicant_profiles','company_profiles','school_coordinators','users','schools');")
+  }
 
   const hash = await bcrypt.hash(PASSWORD, 10)
 
@@ -22,37 +54,43 @@ async function main() {
   ]
   const schoolIds = {}
   for (const s of schoolRows) {
-    schoolIds[s] = run(`INSERT INTO schools (name) VALUES (?)`, s)
+    schoolIds[s] = await run(`INSERT INTO schools (name) VALUES (?)`, s)
   }
 
-  function user(name, email, role) {
-    const id = run('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)', name, email, hash, role)
+  async function user(name, email, role) {
+    const id = await run(
+      "INSERT INTO users (name, email, password_hash, role, is_verified) VALUES (?, ?, ?, ?, ?)",
+      name, email, hash, role, role === 'company' || role === 'school' ? 1 : 0
+    )
     return { id, name, email, role }
   }
 
+  // Administrator (verifies & creates company/school accounts)
+  await user('OJT Connect Admin', 'admin@demo.com', 'admin')
+
   // School coordinators
-  const schoolCoord = user('Ms. Angela Reyes', 'school@demo.com', 'school')
-  run('INSERT INTO school_coordinators (user_id, school_id, position) VALUES (?, ?, ?)',
+  const schoolCoord = await user('Ms. Angela Reyes', 'school@demo.com', 'school')
+  await run('INSERT INTO school_coordinators (user_id, school_id, position) VALUES (?, ?, ?)',
     schoolCoord.id, schoolIds['University of the East'], 'OJT Coordinator')
 
   // Applicants
-  const ap1 = user('Juan Carlos Dela Cruz', 'applicant@demo.com', 'applicant')
-  run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
+  const ap1 = await user('Juan Carlos Dela Cruz', 'applicant@demo.com', 'applicant')
+  await run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
        VALUES (?, ?, 'Information Technology', '4th Year', '0917 555 1234', 'Manila', 14.5995, 120.9842)`,
     ap1.id, schoolIds['University of the East'])
 
-  const ap2 = user('Maria Isabel Santos', 'applicant2@demo.com', 'applicant')
-  run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
+  const ap2 = await user('Maria Isabel Santos', 'applicant2@demo.com', 'applicant')
+  await run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
        VALUES (?, ?, 'Computer Science', '3rd Year', '0918 555 8765', 'Makati', 14.5547, 121.0244)`,
     ap2.id, schoolIds['University of the East'])
 
-  const ap3 = user('Mark Angelo Bautista', 'applicant3@demo.com', 'applicant')
-  run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
+  const ap3 = await user('Mark Angelo Bautista', 'applicant3@demo.com', 'applicant')
+  await run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
        VALUES (?, ?, 'Electrical Engineering', '4th Year', '0920 555 2468', 'Quezon City', 14.676, 121.0437)`,
     ap3.id, schoolIds['Polytechnic University of the Philippines'])
 
-  const ap4 = user('Camille Dizon', 'applicant4@demo.com', 'applicant')
-  run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
+  const ap4 = await user('Camille Dizon', 'applicant4@demo.com', 'applicant')
+  await run(`INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone, search_city, search_lat, search_lng)
        VALUES (?, ?, 'Business Administration', '3rd Year', '0915 555 1357', 'Pasig', 14.5864, 121.0619)`,
     ap4.id, schoolIds['Far Eastern University'])
 
@@ -77,9 +115,9 @@ async function main() {
 
   const companyIds = {}
   for (const c of companies) {
-    const u = user(c.name, c.email, 'company')
+    const u = await user(c.name, c.email, 'company')
     companyIds[c.company_name] = u.id
-    run('INSERT INTO company_profiles (user_id, company_name, industry, description, address, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    await run('INSERT INTO company_profiles (user_id, company_name, industry, description, address, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?)',
       u.id, c.company_name, c.industry, c.description, c.address, c.lat, c.lng)
   }
 
@@ -131,7 +169,7 @@ async function main() {
 
   const postingIds = {}
   for (const p of postings) {
-    const pid = run(
+    const pid = await run(
       `INSERT INTO postings (company_id, title, description, requirements, course_tags, slots, city, address, lat, lng, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
       companyIds[p.company], p.title, p.desc, p.req, p.tags.join(','), p.slots, p.city, p.address, p.lat, p.lng
@@ -140,9 +178,9 @@ async function main() {
   }
 
   // Sample applications + chat for applicant@demo.com
-  const app1 = run(
+  const app1 = await run(
     `INSERT INTO applications (posting_id, applicant_id, cover_message, status, created_at, updated_at)
-     VALUES (?, ?, ?, 'under_review', datetime('now','-3 days'), datetime('now','-1 day'))`,
+     VALUES (?, ?, ?, 'under_review', ${relDate('-', 3, 'DAY')}, ${relDate('-', 1, 'DAY')})`,
     postingIds['IT Helpdesk Intern'], ap1.id,
     'Good day! I am an IT student looking to gain hands-on helpdesk experience. I am available to start immediately and am willing to learn fast.'
   )
@@ -150,34 +188,34 @@ async function main() {
     ['submitted', 'Your application was submitted'],
     ['under_review', 'We received your application and are reviewing your profile with the IT team.']
   ]) {
-    run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', app1, h[0], h[1])
+    await run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', app1, h[0], h[1])
   }
 
-  run(
-    `INSERT INTO messages (application_id, sender_id, sender_role, content, created_at) VALUES (?, ?, 'company', 'Hi Juan! Thanks for applying to the IT Helpdesk Intern role. Could you send us a copy of your resume and your latest grades?', datetime('now','-2 days'))`,
+  await run(
+    `INSERT INTO messages (application_id, sender_id, sender_role, content, created_at) VALUES (?, ?, 'company', 'Hi Juan! Thanks for applying to the IT Helpdesk Intern role. Could you send us a copy of your resume and your latest grades?', ${relDate('-', 2, 'DAY')})`,
     app1, companyIds['TechNova Solutions']
   )
-  run(
-    `INSERT INTO messages (application_id, sender_id, sender_role, content, created_at) VALUES (?, ?, 'applicant', 'Good day! Attached are my resume and a copy of my TOR. Let me know if you need anything else.', datetime('now','-2 days'))`,
+  await run(
+    `INSERT INTO messages (application_id, sender_id, sender_role, content, created_at) VALUES (?, ?, 'applicant', 'Good day! Attached are my resume and a copy of my TOR. Let me know if you need anything else.', ${relDate('-', 2, 'DAY')})`,
     app1, ap1.id
   )
-  run(
-    `INSERT INTO messages (application_id, sender_id, sender_role, content, created_at) VALUES (?, ?, 'company', 'Perfect, thank you! We will schedule an interview once the team finishes the review. Please keep your phone line open.', datetime('now','-1 day'))`,
+  await run(
+    `INSERT INTO messages (application_id, sender_id, sender_role, content, created_at) VALUES (?, ?, 'company', 'Perfect, thank you! We will schedule an interview once the team finishes the review. Please keep your phone line open.', ${relDate('-', 1, 'DAY')})`,
     app1, companyIds['TechNova Solutions']
   )
 
-  const app2 = run(
+  const app2 = await run(
     `INSERT INTO applications (posting_id, applicant_id, cover_message, status, created_at, updated_at)
-     VALUES (?, ?, ?, 'submitted', datetime('now','-5 hours'), datetime('now','-5 hours'))`,
+     VALUES (?, ?, ?, 'submitted', ${relDate('-', 5, 'HOUR')}, ${relDate('-', 5, 'HOUR')})`,
     postingIds['Customer Service Trainee'], ap1.id,
     'Hi! I would like to apply for the Customer Service Trainee position. I am confident in my communication skills and can handle shifting schedules.'
   )
-  run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', app2, 'submitted', 'Your application was submitted')
+  await run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', app2, 'submitted', 'Your application was submitted')
 
   // Accepted sample so school dashboard shows a "placed" student
-  const app3 = run(
+  const app3 = await run(
     `INSERT INTO applications (posting_id, applicant_id, cover_message, status, created_at, updated_at)
-     VALUES (?, ?, ?, 'accepted', datetime('now','-10 days'), datetime('now','-2 days'))`,
+     VALUES (?, ?, ?, 'accepted', ${relDate('-', 10, 'DAY')}, ${relDate('-', 2, 'DAY')})`,
     postingIds['Civil Engineering Assistant Intern'], ap2.id,
     'I am interested in site engineering and want to apply my drafting skills in a real project environment.'
   )
@@ -187,11 +225,11 @@ async function main() {
     ['interview', 'Interview conducted on site'],
     ['accepted', 'Congratulations! You are hired for the internship.']
   ]) {
-    run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', app3, h[0], h[1])
+    await run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', app3, h[0], h[1])
   }
 
   // A resume for applicant@demo.com
-  run(
+  await run(
     `INSERT INTO resumes (applicant_id, data) VALUES (?, ?)`,
     ap1.id,
     JSON.stringify({
@@ -205,6 +243,7 @@ async function main() {
   )
 
   console.log('\n  Seeded demo accounts (password: demo123)')
+  console.log('  • admin@demo.com         — administrator (creates companies & schools)')
   console.log('  • school@demo.com       — school coordinator (University of the East)')
   console.log('  • applicant@demo.com    — BSIT applicant with applications + chat')
   console.log('  • applicant2@demo.com   — placed student (accepted)')
@@ -213,7 +252,16 @@ async function main() {
   console.log('  • company@demo.com      — TechNova Solutions\n')
 }
 
-main().catch((e) => {
-  console.error(e)
-  process.exit(1)
-})
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+
+if (isMain) {
+  seedDatabase().then(async () => {
+    if (DB_MODE === 'mysql' && typeof db.end === 'function') {
+      await db.end()
+    }
+    process.exit(0)
+  }).catch((e) => {
+    console.error(e)
+    process.exit(1)
+  })
+}

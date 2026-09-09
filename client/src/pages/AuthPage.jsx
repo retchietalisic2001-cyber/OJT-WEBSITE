@@ -5,18 +5,21 @@ import { api } from '../api.js'
 import { toast } from '../toast.jsx'
 import { COURSES, YEAR_LEVELS } from '../constants.js'
 
-const ROLES = [
-  { id: 'applicant', label: 'I am an Applicant', desc: 'Looking for my OJT', icon: 'resume' },
-  { id: 'company', label: 'I represent a Company', desc: 'Post OJT openings', icon: 'doc' },
-  { id: 'school', label: 'I work in a School', desc: 'Monitor my students', icon: 'home' }
-]
+const GENDERS = ['Male', 'Female', 'Prefer not to say']
+
+const EYE_ON =
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" /><circle cx="12" cy="12" r="3" /></svg>
+const EYE_OFF =
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" /><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /><path d="M1 1l22 22" /></svg>
 
 export default function AuthPage() {
   const { user, ready, login, register } = useAuth()
   const navigate = useNavigate()
   const [mode, setMode] = useState('login')
   const [schools, setSchools] = useState([])
-  const [form, setForm] = useState({ role: 'applicant', schoolId: '', newSchool: '', schoolMode: 'pick' })
+  const [form, setForm] = useState({ schoolId: '', newSchool: '', schoolMode: 'pick', courseMode: 'pick' })
+  const [show, setShow] = useState({})
+  const [socialError, setSocialError] = useState(() => new URLSearchParams(window.location.search).get('error') === 'social')
 
   useEffect(() => {
     api('/schools').then(setSchools).catch(() => {})
@@ -28,29 +31,26 @@ export default function AuthPage() {
 
   const submit = async (e) => {
     e.preventDefault()
+    if (mode === 'register' && form.password !== form.confirmPassword) {
+      toast.error('Passwords do not match')
+      return
+    }
     const payload = {
       name: form.name,
       email: form.email,
+      username: form.username,
       password: form.password,
-      role: form.role,
-      position: form.position
+      role: 'applicant',
+      phone: form.phone,
+      address: form.address,
+      birthdate: form.birthdate,
+      gender: form.gender,
+      course: form.course,
+      yearLevel: form.yearLevel
     }
     try {
-      if (form.role === 'applicant') {
-        payload.course = form.course
-        payload.yearLevel = form.yearLevel
-        payload.phone = form.phone
-        if (form.schoolMode === 'new') payload.schoolName = form.newSchool
-        else payload.schoolId = form.schoolId
-      }
-      if (form.role === 'company') {
-        payload.companyName = form.companyName
-        payload.industry = form.industry
-      }
-      if (form.role === 'school') {
-        payload.schoolName = form.schoolName
-        payload.position = form.position
-      }
+      if (form.schoolMode === 'new') payload.schoolName = form.newSchool
+      else payload.schoolId = form.schoolId
 
       const u = mode === 'register' ? await register(payload) : await login(form.email, form.password)
       toast.success(mode === 'register' ? `Welcome to OJT Connect, ${u.name.split(' ')[0]}!` : 'Welcome back!')
@@ -76,6 +76,21 @@ export default function AuthPage() {
         <option key={o} value={o}>{o}</option>
       ))}
     </select>
+  )
+  const pwd = (k, props = {}) => (
+    <div className="pwd-wrap">
+      <input
+        className="input"
+        type={show[k] ? 'text' : 'password'}
+        value={form[k] || ''}
+        onChange={(e) => set(k, e.target.value)}
+        required
+        {...props}
+      />
+      <button type="button" className="pwd-toggle" aria-label="Toggle password visibility" onClick={() => setShow((s) => ({ ...s, [k]: !s[k] }))}>
+        {show[k] ? EYE_OFF : EYE_ON}
+      </button>
+    </div>
   )
 
   return (
@@ -105,9 +120,6 @@ export default function AuthPage() {
           <li>📈 Live application tracking</li>
           <li>✨ AI-assisted resume builder</li>
         </ul>
-        <div className="auth-credit">
-          Demo accounts (password <code>demo123</code>): <b>company@demo.com</b> · <b>applicant@demo.com</b> · <b>school@demo.com</b>
-        </div>
       </div>
 
       <div className="auth-card-wrap">
@@ -117,69 +129,93 @@ export default function AuthPage() {
             <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Create account</button>
           </div>
 
+          {socialError && (
+            <div className="social-error-banner">Sign-in with Google, Facebook, or Yahoo failed. Please try again.</div>
+          )}
+
           <form onSubmit={submit} className="auth-form">
             {mode === 'register' && (
               <>
-                <div className="role-grid">
-                  {ROLES.map((r) => (
-                    <button
-                      type="button"
-                      key={r.id}
-                      className={'role-card' + (form.role === r.id ? ' selected' : '')}
-                      onClick={() => set('role', r.id)}
-                    >
-                      <strong>{r.label}</strong>
-                      <span>{r.desc}</span>
-                    </button>
-                  ))}
+                <div className="field">
+                  <label className="field-label">Signing up as an <strong>Applicant</strong></label>
+                  <p className="muted small">Companies and schools are verified and added by an administrator — this prevents fake accounts and scam OJT offers.</p>
                 </div>
 
-                {form.role === 'applicant' && (
-                  <div className="form-grid">
-                    <label className="field">Course
-                      {select('course', COURSES)}
-                    </label>
-                    <label className="field">Year level
-                      {select('yearLevel', YEAR_LEVELS)}
-                    </label>
-                  </div>
-                )}
-
-                {form.role === 'company' && (
-                  <div className="form-grid">
-                    <label className="field">Company name
-                      {input('companyName', { placeholder: 'e.g. TechNova Solutions' })}
-                    </label>
-                    <label className="field">Industry
-                      {input('industry', { placeholder: 'e.g. IT Services' })}
-                    </label>
-                  </div>
-                )}
-
-                {form.role === 'school' && (
-                  <div className="form-grid">
-                    <label className="field">School name
-                      {input('schoolName', { placeholder: 'e.g. University of the East' })}
-                    </label>
-                    <label className="field">Your role
-                      {input('position', { placeholder: 'e.g. OJT Coordinator', defaultValue: 'OJT Coordinator' })}
-                    </label>
-                  </div>
-                )}
+                <div className="form-grid">
+                  <label className="field">Course
+                    <div className="seg">
+                      <button
+                        type="button"
+                        className={form.courseMode === 'pick' ? 'active' : ''}
+                        onClick={() => set('courseMode', 'pick')}
+                      >
+                        Select course
+                      </button>
+                      <button
+                        type="button"
+                        className={form.courseMode === 'other' ? 'active' : ''}
+                        onClick={() => set('courseMode', 'other')}
+                      >
+                        Not listed
+                      </button>
+                    </div>
+                    {form.courseMode === 'pick'
+                      ? select('course', COURSES)
+                      : input('course', { placeholder: 'Type your course name' })}
+                  </label>
+                  <label className="field">Year level
+                    {select('yearLevel', YEAR_LEVELS)}
+                  </label>
+                </div>
               </>
             )}
 
-            <label className="field">Full name
-              {mode === 'register' ? input('name', { placeholder: 'Your full name' }) : null}
-            </label>
-            <label className="field">Email
-              {input('email', { type: 'email', placeholder: 'you@example.com' })}
-            </label>
-            <label className="field">Password
-              {input('password', { type: 'password', placeholder: form.role === 'applicant' && mode === 'register' ? 'Min 6 characters' : '••••••••', minLength: 6 })}
+            <div className="form-grid">
+              <label className="field">Full name
+                {mode === 'register' ? input('name', { placeholder: 'Your full name' }) : null}
+              </label>
+              {mode === 'register' && (
+                <label className="field">Student number / username
+                  {input('username', { placeholder: 'e.g. 2021-01234' })}
+                </label>
+              )}
+            </div>
+
+            <label className="field">Email or username
+              {input('email', { type: mode === 'register' ? 'email' : 'text', placeholder: mode === 'register' ? 'you@example.com' : 'you@example.com or your username' })}
             </label>
 
-            {mode === 'register' && form.role === 'applicant' && (
+            {mode === 'register' && (
+              <>
+                <div className="form-grid">
+                  <label className="field">Contact number
+                    {input('phone', { type: 'tel', placeholder: '09xx xxx xxxx' })}
+                  </label>
+                  <label className="field">Date of birth
+                    {input('birthdate', { type: 'date' })}
+                  </label>
+                </div>
+                <div className="form-grid">
+                  <label className="field">Gender
+                    {select('gender', GENDERS)}
+                  </label>
+                  <label className="field">Home address
+                    {input('address', { placeholder: 'Street, Barangay, City', required: false })}
+                  </label>
+                </div>
+              </>
+            )}
+
+            <label className="field">Password
+              {pwd('password', { placeholder: mode === 'register' ? 'Min 6 characters' : '••••••••', minLength: 6 })}
+            </label>
+            {mode === 'register' && (
+              <label className="field">Confirm password
+                {pwd('confirmPassword', { placeholder: 'Repeat your password', minLength: 6 })}
+              </label>
+            )}
+
+            {mode === 'register' && (
               <div className="field">
                 <label className="field-label">Your school</label>
                 <div className="seg">
@@ -199,20 +235,28 @@ export default function AuthPage() {
               </div>
             )}
 
-            {form.role === 'applicant' && mode === 'register' && (
-              <label className="field">Phone (optional)
-                <input className="input" placeholder="09xx xxx xxxx" value={form.phone || ''} onChange={(e) => set('phone', e.target.value)} />
-              </label>
-            )}
-
             <button className="btn btn-primary btn-block" type="submit">
               {mode === 'login' ? 'Sign in' : 'Create my account'}
             </button>
 
             {mode === 'login' && (
-              <button type="button" className="link-btn demo-btn" onClick={() => { setForm((f) => ({ ...f, email: 'applicant@demo.com', password: 'demo123' })) }}>
-                Fill in demo applicant account
-              </button>
+              <>
+                <div className="divider-label">or continue with</div>
+                <div className="social-row">
+                  <a className="social-btn social-google" href="/api/auth/google">
+                    <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.46H12v4.66h6.46a5.6 5.6 0 0 1-2.43 3.67v3.05h3.94c2.3-2.12 3.53-5.24 3.53-8.92z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.08 7.94-2.9l-3.94-3.05c-1.1.74-2.5 1.18-4 1.18-3.07 0-5.67-2.08-6.6-4.86H1.3v3.15A11.99 11.99 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.4 14.37a7.2 7.2 0 0 1 0-4.74V6.48H1.3a12 12 0 0 0 0 11.04l4.1-3.15z"/><path fill="#EA4335" d="M12 4.67c1.76 0 3.35.61 4.6 1.8l3.43-3.44C17.96 1.08 15.24 0 12 0A11.99 11.99 0 0 0 1.3 6.48l4.1 3.15C6.33 6.75 8.93 4.67 12 4.67z"/></svg>
+                    Google
+                  </a>
+                  <a className="social-btn social-facebook" href="/api/auth/facebook">
+                    <svg viewBox="0 0 24 24"><path fill="#fff" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07c0 6.02 4.39 11.02 10.13 11.93v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.7 4.53-4.7 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.95.93-1.95 1.87v2.26h3.32l-.53 3.49h-2.79V24C19.61 23.09 24 18.09 24 12.07z"/></svg>
+                    Facebook
+                  </a>
+                  <a className="social-btn social-yahoo" href="/api/auth/yahoo">
+                    <svg viewBox="0 0 24 24"><path fill="#fff" d="M7.42 2.03H2.5l5.5 9.84-3.45 7.53h4.82l4.56-9.78c-.06.07.13.31-3.51-7.59zM23.5 2.03H18.9l-6.66 12.4 5.5 7.54h4.76l-3.03-4.16 4.03-7.08z"/></svg>
+                    Yahoo
+                  </a>
+                </div>
+              </>
             )}
           </form>
         </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../../store.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { api } from '../../api.js'
 import { Spinner, emptyState } from '../../components/ui.jsx'
 import { toast } from '../../toast.jsx'
@@ -56,6 +57,7 @@ function AddRowForm({ fields, setFields, field, placeholders, buttonLabel }) {
 
 export default function ResumeBuilder() {
   const { token, user } = useAuth()
+  const confirm = useConfirm()
   const [resume, setResume] = useState(null)
   const [skills, setSkills] = useState([])
   const [customSkill, setCustomSkill] = useState('')
@@ -107,6 +109,13 @@ export default function ResumeBuilder() {
   }
 
   const save = async () => {
+    const ok = await confirm({
+      title: 'Save resume?',
+      message: 'Your resume will be saved and used whenever you attach it to an application.',
+      confirmLabel: 'Save resume',
+      danger: false
+    })
+    if (!ok) return
     setSaving(true)
     try {
       await api('/resume/my', { method: 'PUT', token, body: { data: resume.data } })

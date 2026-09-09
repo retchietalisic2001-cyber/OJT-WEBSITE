@@ -17,8 +17,8 @@ const DEFAULT_RESUME = {
   certifications: []
 }
 
-function loadResume(userId) {
-  const row = get('SELECT * FROM resumes WHERE applicant_id = ?', userId)
+async function loadResume(userId) {
+  const row = await get('SELECT * FROM resumes WHERE applicant_id = ?', userId)
   if (!row) return { applicant_id: userId, data: { ...DEFAULT_RESUME }, updated_at: null }
   let data
   try {
@@ -29,12 +29,12 @@ function loadResume(userId) {
   return { ...row, data: { ...DEFAULT_RESUME, ...data } }
 }
 
-router.get('/my', requireRole('applicant'), (req, res) => {
-  const resume = loadResume(req.user.id)
+router.get('/my', requireRole('applicant'), async (req, res) => {
+  const resume = await loadResume(req.user.id)
   res.json(resume)
 })
 
-router.put('/my', requireRole('applicant'), (req, res) => {
+router.put('/my', requireRole('applicant'), async (req, res) => {
   const { data } = req.body || {}
   if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Invalid resume data' })
 
@@ -47,13 +47,13 @@ router.put('/my', requireRole('applicant'), (req, res) => {
     certifications: Array.isArray(data.certifications) ? data.certifications : []
   }
 
-  const existing = get('SELECT applicant_id FROM resumes WHERE applicant_id = ?', req.user.id)
+  const existing = await get('SELECT applicant_id FROM resumes WHERE applicant_id = ?', req.user.id)
   if (existing) {
-    run('UPDATE resumes SET data = ?, updated_at = ? WHERE applicant_id = ?', JSON.stringify(normalized), nowTs(), req.user.id)
+    await run('UPDATE resumes SET data = ?, updated_at = ? WHERE applicant_id = ?', JSON.stringify(normalized), nowTs(), req.user.id)
   } else {
-    run('INSERT INTO resumes (applicant_id, data, updated_at) VALUES (?, ?, ?)', req.user.id, JSON.stringify(normalized), nowTs())
+    await run('INSERT INTO resumes (applicant_id, data, updated_at) VALUES (?, ?, ?)', req.user.id, JSON.stringify(normalized), nowTs())
   }
-  res.json(loadResume(req.user.id))
+  res.json(await loadResume(req.user.id))
 })
 
 router.get('/suggestions', requireRole('applicant'), (req, res) => {
@@ -64,42 +64,56 @@ router.get('/suggestions', requireRole('applicant'), (req, res) => {
   })
 })
 
+export async function attachResumeToApplication({ applicationId, applicantId, app }) {
+  const ctx = await get(
+    `SELECT a.id, a.applicant_id, p.company_id FROM applications a JOIN postings p ON p.id = a.posting_id WHERE a.id = ?`,
+    Number(applicationId)
+  )
+  if (!ctx) return { attached: false, error: 'Application not found' }
+  if (ctx.applicant_id !== applicantId) return { attached: false, error: 'Not your application' }
+
+  const resume = await loadResume(applicantId)
+  const hasAny =
+    resume.data.summary ||
+    resume.data.skills.length ||
+    resume.data.education.length ||
+    resume.data.experience.length
+  if (!hasAny) return { attached: false, reason: 'empty' }
+
+  const applicant = await get('SELECT id, name, email FROM users WHERE id = ?', applicantId)
+  const profile = await get('SELECT * FROM applicant_profiles WHERE user_id = ?', applicantId)
+  const school = profile?.school_id ? await get('SELECT name FROM schools WHERE id = ?', profile.school_id) : null
+  const filename = `resume_${applicantId}_${Date.now()}.pdf`
+  await generateResumePdf(applicant, profile, school?.name, resume, filename)
+
+  const id = await run(
+    `INSERT INTO messages (application_id, sender_id, sender_role, content, file_name, file_path, file_mime, file_size)
+     VALUES (?, ?, 'applicant', ?, ?, ?, 'application/pdf', 0)`,
+    ctx.id,
+    applicantId,
+    `Here is my resume — please review.`,
+    `Resume_${applicant.name.replace(/[^a-zA-Z ]/g, '').split(' ').slice(0, 2).join('_')}.pdf`,
+    `/uploads/${filename}`
+  )
+  const message = await get('SELECT * FROM messages WHERE id = ?', id)
+  const io = app?.get && app.get('io')
+  if (io) io.to(`app-${ctx.id}`).emit('message:new', { ...message, category: 'pdf' })
+  return { attached: true, message: { ...message, category: 'pdf' } }
+}
+
 router.post('/applications/:applicationId/attach-resume', requireRole('applicant'), async (req, res, next) => {
   try {
-    const ctx = get(
-      `SELECT a.id, a.applicant_id, p.company_id FROM applications a JOIN postings p ON p.id = a.posting_id WHERE a.id = ?`,
-      Number(req.params.applicationId)
-    )
-    if (!ctx) return res.status(404).json({ error: 'Application not found' })
-    if (ctx.applicant_id !== req.user.id) return res.status(403).json({ error: 'Not your application' })
-
-    const resume = loadResume(req.user.id)
-    const hasAny =
-      resume.data.summary ||
-      resume.data.skills.length ||
-      resume.data.education.length ||
-      resume.data.experience.length
-    if (!hasAny) return res.status(400).json({ error: 'Build your resume first in the Resume Builder' })
-
-    const applicant = get('SELECT id, name, email FROM users WHERE id = ?', req.user.id)
-    const profile = get('SELECT * FROM applicant_profiles WHERE user_id = ?', req.user.id)
-    const school = profile?.school_id ? get('SELECT name FROM schools WHERE id = ?', profile.school_id) : null
-    const filename = `resume_${req.user.id}_${Date.now()}.pdf`
-    await generateResumePdf(applicant, profile, school?.name, resume, filename)
-
-    const id = run(
-      `INSERT INTO messages (application_id, sender_id, sender_role, content, file_name, file_path, file_mime, file_size)
-       VALUES (?, ?, 'applicant', ?, ?, ?, 'application/pdf', 0)`,
-      ctx.id,
-      req.user.id,
-      `Here is my resume — please review.`,
-      `Resume_${applicant.name.replace(/[^a-zA-Z ]/g, '').split(' ').slice(0, 2).join('_')}.pdf`,
-      `/uploads/${filename}`
-    )
-    const message = get('SELECT * FROM messages WHERE id = ?', id)
-    const io = req.app.get('io')
-    if (io) io.to(`app-${ctx.id}`).emit('message:new', { ...message, category: 'pdf' })
-    res.status(201).json({ ok: true, message: { ...message, category: 'pdf' } })
+    const result = await attachResumeToApplication({
+      applicationId: Number(req.params.applicationId),
+      applicantId: req.user.id,
+      app: req.app
+    })
+    if (result.error) {
+      const status = result.error === 'Application not found' ? 404 : 403
+      return res.status(status).json({ error: result.error })
+    }
+    if (result.reason === 'empty') return res.status(400).json({ error: 'Build your resume first in the Resume Builder' })
+    res.status(201).json({ ok: true, message: result.message })
   } catch (err) {
     next(err)
   }
