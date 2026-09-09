@@ -115,7 +115,7 @@ export default function Layout() {
       <main className="content">
         <header className="topbar">
           <Link to={PROFILE_PATH[user.role] || '/app/profile'} className="mini-user top-user" title="My profile">
-            <div className="avatar sm">{displayName.charAt(0).toUpperCase()}</div>
+            <div className="avatar sm">{user.avatar ? <img src={user.avatar} alt={displayName} /> : displayName.charAt(0).toUpperCase()}</div>
             <div className="mini-user-meta">
               <strong>{displayName}</strong>
               <span>{subtitle}</span>

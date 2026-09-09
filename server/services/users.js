@@ -1,7 +1,7 @@
 import { get, run } from '../db.js'
 
 export async function profileFor(user) {
-  const base = { id: user.id, name: user.name, email: user.email, username: user.username || '', role: user.role, phone: user.phone || '', address: user.address || '', birthdate: user.birthdate || '', gender: user.gender || '' }
+  const base = { id: user.id, name: user.name, email: user.email, username: user.username || '', role: user.role, phone: user.phone || '', address: user.address || '', birthdate: user.birthdate || '', gender: user.gender || '', avatar: user.avatar || '' }
   if (user.role === 'applicant') {
     const p = await get('SELECT * FROM applicant_profiles WHERE user_id = ?', user.id)
     let school = null
@@ -25,7 +25,8 @@ export async function profileFor(user) {
         user_id: coord?.user_id ?? null,
         school_id: school?.id ?? coord?.school_id ?? null,
         school_name: school?.name ?? '',
-        position: coord?.position ?? ''
+        position: coord?.position ?? '',
+        logo: school?.logo || ''
       }
     }
   }

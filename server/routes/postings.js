@@ -34,7 +34,7 @@ router.get('/', requireAuth, async (req, res) => {
   const radiusKm = radius != null ? Number(radius) : null
 
   let rows = await all(
-    `SELECT p.*, c.company_name, c.industry,
+    `SELECT p.*, c.company_name, c.industry, c.logo AS company_logo,
             (SELECT COUNT(*) FROM verifications v WHERE v.user_id = c.user_id AND v.status = 'approved') AS verified_count
      FROM postings p JOIN company_profiles c ON c.user_id = p.company_id
      WHERE p.status = 'open'`
@@ -96,7 +96,7 @@ router.get('/my', requireAuth, requireRole('company'), async (req, res) => {
 
 router.get('/:id', requireAuth, async (req, res) => {
   const p = await get(
-    `SELECT p.*, c.company_name, c.industry, c.description AS company_description, c.address AS company_address,
+    `SELECT p.*, c.company_name, c.industry, c.logo AS company_logo, c.description AS company_description, c.address AS company_address,
             (SELECT COUNT(*) FROM verifications v WHERE v.user_id = c.user_id AND v.status = 'approved') AS verified_count
      FROM postings p JOIN company_profiles c ON c.user_id = p.company_id WHERE p.id = ?`,
     req.params.id

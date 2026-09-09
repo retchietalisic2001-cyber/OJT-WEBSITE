@@ -46,7 +46,8 @@ export default function AuthPage() {
       birthdate: form.birthdate,
       gender: form.gender,
       course: form.course,
-      yearLevel: form.yearLevel
+      yearLevel: form.yearLevel,
+      studentId: form.studentId
     }
     try {
       if (form.schoolMode === 'new') payload.schoolName = form.newSchool
@@ -164,7 +165,7 @@ export default function AuthPage() {
                       : input('course', { placeholder: 'Type your course name' })}
                   </label>
                   <label className="field">Year level
-                    {select('yearLevel', YEAR_LEVELS)}
+                    {select('yearLevel', YEAR_LEVELS.filter((y) => y === '3rd Year' || y === '4th Year'))}
                   </label>
                 </div>
               </>
@@ -233,6 +234,13 @@ export default function AuthPage() {
                   <input className="input" placeholder="Type your school name" value={form.newSchool} onChange={(e) => set('newSchool', e.target.value)} required />
                 )}
               </div>
+            )}
+
+            {mode === 'register' && (
+              <label className="field">
+                <span className="field-label">Student / School ID <em className="muted">(optional — your school can place you into your course &amp; room by this ID)</em></span>
+                <input className="input" placeholder="e.g. 2025-00123" value={form.studentId || ''} onChange={(e) => set('studentId', e.target.value)} />
+              </label>
             )}
 
             <button className="btn btn-primary btn-block" type="submit">

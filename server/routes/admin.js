@@ -133,7 +133,7 @@ router.post('/users/school', async (req, res, next) => {
 router.get('/users/all', async (req, res, next) => {
   try {
     const rows = await all(
-      `SELECT u.id, u.name, u.email, u.username, u.phone, u.role, u.created_at,
+      `SELECT u.id, u.name, u.email, u.username, u.phone, u.role, u.created_at, u.is_verified,
               c.company_name,
               s.name AS school_name,
               (SELECT COUNT(*) FROM verifications v WHERE v.user_id = u.id AND v.status = 'approved') AS approved_docs,

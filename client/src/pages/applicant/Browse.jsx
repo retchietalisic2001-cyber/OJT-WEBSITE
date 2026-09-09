@@ -12,11 +12,14 @@ export default function Browse() {
   const [course, setCourse] = useState(p.course || '')
   const [city, setCity] = useState(p.search_city || '')
   const [q, setQ] = useState('')
+  const [addr, setAddr] = useState('')
   const [radius, setRadius] = useState(25)
   const [pos, setPos] = useState(
     p.search_lat != null ? { lat: p.search_lat, lng: p.search_lng } : null
   )
+  const [geoLabel, setGeoLabel] = useState('')
   const [geoFail, setGeoFail] = useState(false)
+  const [addrBusy, setAddrBusy] = useState(false)
   const [postings, setPostings] = useState(null)
   const [loading, setLoading] = useState(false)
 
@@ -32,15 +35,14 @@ export default function Browse() {
       const c = overrides.course ?? course
       if (c) params.set('course', c)
       if (overrides.q ?? q) params.set('q', overrides.q ?? q)
-      let lat = pos?.lat
-      let lng = pos?.lng
-      if (!lat && city && CITY_COORDS[city]) {
-        lat = CITY_COORDS[city][0]
-        lng = CITY_COORDS[city][1]
-      }
-      if (lat != null && lng != null) {
-        params.set('lat', lat)
-        params.set('lng', lng)
+      const lat = overrides.lat ?? pos?.lat
+      const lng = overrides.lng ?? pos?.lng
+      const useCity = (!lat || !lng) && city && CITY_COORDS[city]
+      const baseLat = lat ?? (useCity ? CITY_COORDS[city][0] : null)
+      const baseLng = lng ?? (useCity ? CITY_COORDS[city][1] : null)
+      if (baseLat != null && baseLng != null) {
+        params.set('lat', baseLat)
+        params.set('lng', baseLng)
         params.set('radius', overrides.radius ?? radius)
       }
       params.set('withApplied', '1')
@@ -53,6 +55,14 @@ export default function Browse() {
     }
   }
 
+  const runLocate = (lat, lng, label) => {
+    setPos({ lat, lng })
+    setCity('')
+    setGeoLabel(label)
+    setGeoFail(false)
+    fetchPostings({ lat, lng })
+  }
+
   const useMyLocation = () => {
     setGeoFail(false)
     if (!navigator.geolocation) {
@@ -60,12 +70,44 @@ export default function Browse() {
       return
     }
     navigator.geolocation.getCurrentPosition(
-      (g) => {
-        setPos({ lat: g.coords.latitude, lng: g.coords.longitude })
-        setCity('')
-      },
+      (g) => runLocate(g.coords.latitude, g.coords.longitude, 'your current location'),
       () => setGeoFail(true)
     )
+  }
+
+  const locateAddress = async (e) => {
+    if (e?.preventDefault) e.preventDefault()
+    const address = addr.trim()
+    if (!address) return
+    setAddrBusy(true)
+    setGeoFail(false)
+    try {
+      const q = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ph&q=${encodeURIComponent(address)}`
+      const res = await (await fetch(q)).json()
+      if (!res.length) {
+        setGeoFail(true)
+        return
+      }
+      runLocate(+res[0].lat, +res[0].lon, res[0].display_name || address)
+    } catch {
+      setGeoFail(true)
+    } finally {
+      setAddrBusy(false)
+    }
+  }
+
+  const onPickCity = (e) => {
+    const c = e.target.value
+    setCity(c)
+    setGeoLabel('')
+    if (c && CITY_COORDS[c]) {
+      setPos(null)
+      setAddr('')
+      const [lat, lng] = CITY_COORDS[c]
+      fetchPostings({ lat, lng })
+    } else {
+      fetchPostings()
+    }
   }
 
   const markerList = useMemo(
@@ -108,7 +150,7 @@ export default function Browse() {
           </label>
           <label className="field">
             <span className="field-label">City</span>
-            <select className="input" value={city} onChange={(e) => setCity(e.target.value)}>
+            <select className="input" value={city} onChange={onPickCity}>
               <option value="">Anywhere</option>
               {CITIES.map((c) => (
                 <option key={c}>{c}</option>
@@ -130,12 +172,30 @@ export default function Browse() {
               {loading ? 'Searching…' : 'Search'}
             </button>
             <button type="button" className="btn btn-ghost" onClick={useMyLocation}>
-              📍 Use my location
+              📍 Locate me instantly
             </button>
           </div>
         </div>
-        {geoFail && <p className="muted warn-text">Location unavailable — searching from selected city center instead.</p>}
-        {city && !pos && <p className="muted">Selecting location from city center: {city}</p>}
+
+        <form className="addr-row" onSubmit={locateAddress}>
+          <input
+            className="input"
+            placeholder="Or type an address to locate instantly on the map…"
+            value={addr}
+            onChange={(e) => setAddr(e.target.value)}
+          />
+          <button type="submit" className="btn btn-ghost" disabled={addrBusy}>
+            {addrBusy ? 'Locating…' : '🔎 Locate address'}
+          </button>
+        </form>
+
+        {geoFail && !pos && <p className="muted warn-text">Location unavailable or address not found — searching from selected city center instead.</p>}
+        {mapCenter && (
+          <p className="muted locate-note">
+            ⭕ Circle = your search range. Showing openings within <strong>{radius} km</strong> of{' '}
+            {geoLabel ? <strong>{geoLabel.slice(0, 60)}</strong> : city ? <strong>{city}</strong> : 'this location'}.
+          </p>
+        )}
       </div>
 
       <div className="browse-grid">

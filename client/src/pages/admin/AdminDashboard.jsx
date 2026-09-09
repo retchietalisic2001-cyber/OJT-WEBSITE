@@ -273,7 +273,7 @@ function UserList({ users, onDelete }) {
                   <td>
                     {u.role === 'applicant' || u.role === 'admin' ? (
                       <span className="muted small">—</span>
-                    ) : u.approved_docs > 0 ? (
+                    ) : u.is_verified || u.approved_docs > 0 ? (
                       <span className="req-badge approved">Verified</span>
                     ) : u.pending_docs > 0 ? (
                       <span className="req-badge pending">Pending ({u.pending_docs})</span>

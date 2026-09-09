@@ -12,6 +12,8 @@ export default function ProfilePage() {
   const { token, user, setProfile } = useAuth()
   const confirm = useConfirm()
   const [schools, setSchools] = useState([])
+  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [logoBusy, setLogoBusy] = useState(false)
   const p = (user && user.profile) || {}
   const role = user?.role || ''
 
@@ -23,6 +25,7 @@ export default function ProfilePage() {
     gender: user?.gender || '',
     course: p.course || '',
     yearLevel: p.year_level || '',
+    studentId: p.student_id || '',
     searchCity: p.search_city || '',
     schoolId: p.school_id || '',
     schoolName: '',
@@ -49,6 +52,7 @@ export default function ProfilePage() {
       gender: user.gender || '',
       course: u.course || '',
       yearLevel: u.year_level || '',
+      studentId: u.student_id || '',
       searchCity: u.search_city || '',
       schoolId: u.school_id || '',
       companyName: u.company_name || '',
@@ -78,6 +82,50 @@ export default function ProfilePage() {
       toast.success('Profile updated')
     } catch (e) {
       toast.error(e.message)
+    }
+  }
+
+  const uploadAvatar = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!/^image\/(png|jpeg|jpg|webp|gif)$/.test(file.type)) {
+      return toast.error('Please choose an image (PNG, JPG, WebP or GIF)')
+    }
+    if (file.size > 5 * 1024 * 1024) return toast.error('Image is too large — maximum 5MB')
+    const fd = new FormData()
+    fd.append('avatar', file)
+    setAvatarBusy(true)
+    try {
+      const updated = await api('/auth/avatar', { method: 'PUT', token, form: fd })
+      setProfile(updated)
+      toast.success('Profile picture updated')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+
+  const uploadLogo = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!/^image\/(png|jpeg|jpg|webp|gif)$/.test(file.type)) {
+      return toast.error('Please choose an image (PNG, JPG, WebP or GIF)')
+    }
+    if (file.size > 5 * 1024 * 1024) return toast.error('Image is too large — maximum 5MB')
+    const fd = new FormData()
+    fd.append('logo', file)
+    setLogoBusy(true)
+    try {
+      const updated = await api('/auth/logo', { method: 'PUT', token, form: fd })
+      setProfile(updated)
+      toast.success(role === 'company' ? 'Company logo updated' : 'School logo updated')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setLogoBusy(false)
     }
   }
 
@@ -116,6 +164,38 @@ export default function ProfilePage() {
       </header>
 
       <div className="card card-pad profile-form">
+        <div className="avatar-picker">
+          <div className="avatar lg">
+            {user.avatar ? <img src={user.avatar} alt={user.name} /> : (role === 'company' ? (p.company_name || user.name).charAt(0).toUpperCase() : user.name.charAt(0).toUpperCase())}
+          </div>
+          <div className="avatar-picker-actions">
+            <label className="btn btn-ghost btn-sm avatar-upload-btn">
+              {avatarBusy ? 'Uploading…' : '📷 Upload profile picture'}
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadAvatar} disabled={avatarBusy} hidden />
+            </label>
+            <span className="muted small">Shown on your profile and in the header. PNG, JPG or WebP, max 5MB.</span>
+          </div>
+        </div>
+
+        {(role === 'company' || role === 'school') && (
+          <div className="avatar-picker logo-row">
+            <div className="logo-preview">
+              {p.logo ? <img src={p.logo} alt={role === 'company' ? 'Company logo' : 'School logo'} /> : (role === 'company' ? (p.company_name || 'C').charAt(0).toUpperCase() : (p.school_name || 'S').charAt(0).toUpperCase())}
+            </div>
+            <div className="avatar-picker-actions">
+              <label className="btn btn-ghost btn-sm avatar-upload-btn">
+                {logoBusy ? 'Uploading…' : role === 'company' ? '🖼️ Upload company logo' : '🖼️ Upload school logo'}
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadLogo} disabled={logoBusy} hidden />
+              </label>
+              <span className="muted small">
+                {role === 'company'
+                  ? 'Used on your job postings so students recognize your company. PNG, JPG or WebP, max 5MB.'
+                  : 'Used on your school pages for easy identification. PNG, JPG or WebP, max 5MB.'}
+              </span>
+            </div>
+          </div>
+        )}
+
         <h3>Account details</h3>
         <div className="form-grid">
           <label className="field">Username
@@ -193,6 +273,10 @@ export default function ProfilePage() {
                   <option value="">— select —</option>
                   {schools.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
+                <span className="muted small">Use the exact Student / School ID your school uses so they can place you in your course &amp; room.</span>
+              </label>
+              <label className="field">Student / School ID
+                <input className="input" value={form.studentId} onChange={(e) => set('studentId', e.target.value)} placeholder="e.g. 2025-00123" />
               </label>
             </div>
 

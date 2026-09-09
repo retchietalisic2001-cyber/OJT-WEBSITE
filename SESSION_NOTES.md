@@ -5,9 +5,29 @@
 - Backend: Express + MySQL (also supports SQLite). Frontend: React/Vite.
 - Dev running: client http://localhost:5173, API http://localhost:3001, MySQL `localhost:3306/ojtconnect` (DB_MODE=mysql). Logs in `dev2.log` at root. `node --watch` auto-restarts server on file change.
 - Verify: `node --check server/<file>` from root; `npm run build` in `client/`.
-- Test logins (seed PASSWORD = `demo123`): admin `admin@demo.com`, company `company@demo.com` / `company2@demo.com`, school `school@demo.com`, applicant `applicant@demo.com` (+ applicant2/3).
+- ONLY admin account exists (sample users removed): `admin@demo.com` / `demo123`. `server/seed.js` no longer seeds demo data — `seedDatabase()` wipes sample tables but KEEPS all `role='admin'` rows, and `ensureAdmin()` creates a default admin (`ADMIN_EMAIL`/`ADMIN_PASSWORD` env or `admin@ojtconnect.com`/`admin123`) if none exists. Run via `npm run seed`. To test other roles, create a company/school via Admin Dashboard (auto-`is_verified`) and register applicants through the signup form.
 
 ## Feature Status (all VERIFIED, test data cleaned up)
+
+### School tracking: Course → Room + Student ID placement (COMPLETED, VERIFIED)
+- New tables `school_courses`, `school_rooms`, `enrollments` (SQLite+MySQL, auto-migrated). New `applicant_profiles.student_id` column. `enrollments` has a GLOBAL unique on `student_id` + FK cascades.
+- School routes (`/api/schools`): courses CRUD, rooms CRUD, `enrollments` add (by Student ID — immediate place if matching registered applicant, else `invited` and auto-placed when they register/set that ID), `enrollments/place` (assign unassigned/legacy), `enrollments/:id` DELETE (untrack), grouped `GET /enrollments` (courses→rooms→students + legacy + unassigned), `GET /my-placement` for applicants.
+- Duplicate blocking: same Student ID cannot be invited/placed by a second school (400 with school name). Auto-place via `matchEnrollmentByStudentId()` runs on register + profile save (auth.js imports it from schools.js — no circular import).
+- Clients: AuthPage + ProfilePage student ID field; SchoolHome rewritten (course+room management, add-by-ID form, grouped lists, unassigned assign, untrack, invited badges); StudentDetail placement card + untrack; ApplicantHome "Placed by your school" banner.
+- E2E verified: invite→auto-place, immediate place, cross-school 400, grouping. Build + node --check pass. CADENCE: seed wipes new tables too.
+
+### Browse map: locate + range circle (COMPLETED, client-only)
+- "📍 Locate me instantly" geolocates → centers map + draws radius circle immediately and auto-searches.
+- New address box: geocodes via OpenStreetMap Nominatim (`countrycodes=ph`) → "Locate address" instantly re-centers + circle + auto-search.
+- City dropdown now searches instantly and recenters map+circle on city center.
+- Live note under map: "Circle = your search range. Showing openings within N km of <label>." Radius slider updates the circle live. Geo abilities kept client-only (no server change).
+
+### 0. Profile picture + logos (COMPLETED)
+- `users.avatar` column + `PUT /api/auth/avatar` (all roles); `PUT /api/auth/logo` (company/school only) → writes `company_profiles.logo` or shared `schools.logo`. Both return updated `profileFor`.
+- `profileFor` returns `avatar` (base) and `logo` (company profile spread / school profile). Old uploaded files are unlinked on replace.
+- `postings.js` GET `/` and `/:id` select `c.logo AS company_logo`.
+- Client: ProfilePage avatar picker (all roles) + logo picker (company/school, preview 64px); Layout topbar avatar shows photo; JobCard & PostingDetail hero show company logo; SchoolHome header shows school logo.
+- Year-level dropdown on signup limited to 3rd/4th Year (AuthPage only).
 
 ### 1. Account request / support widget
 - `account_requests` has `file2_*` columns in both DB modes; `support.js` uses `requestUpload.array('file', 2)`; multi-file client UI with per-file 20MB checks; admin `RequestCard` shows both documents.
@@ -49,4 +69,4 @@
 - Resume is auto-attached on apply; ApplicationDetail still has an "Attach resume" button (goes through same helper).
 - VerificationPanel still exists as doc-upload panel (shown as Verified for admin-created accounts).
 - Chat, applications, posting creation, admin verifications flows were left unchanged.
-- Testing of the actual seeded company `company@demo.com` vs `company2@demo.com` — both verified.
+- To test company/school flows, create accounts via Admin Dashboard (they're auto-verified) and register applicants via signup.

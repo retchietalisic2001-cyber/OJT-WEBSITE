@@ -145,7 +145,7 @@ export function JobCard({ p, to, extra }) {
   return (
     <Link to={to} className="job-card">
       <div className="job-card-top">
-        <div className="job-logo">{p.company_name?.charAt(0).toUpperCase()}</div>
+        <div className="job-logo">{p.company_logo ? <img src={p.company_logo} alt={p.company_name} /> : p.company_name?.charAt(0).toUpperCase()}</div>
         <div className="job-title-wrap">
           <h3>{p.title}</h3>
           <span className="muted">

@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS schools (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
+  logo TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -65,11 +66,45 @@ CREATE TABLE IF NOT EXISTS applicant_profiles (
   school_id INTEGER REFERENCES schools(id) ON DELETE SET NULL,
   course TEXT NOT NULL DEFAULT '',
   year_level TEXT NOT NULL DEFAULT '',
+  student_id TEXT NOT NULL DEFAULT '',
   phone TEXT NOT NULL DEFAULT '',
   search_city TEXT NOT NULL DEFAULT '',
   search_lat REAL,
   search_lng REAL
 );
+
+CREATE TABLE IF NOT EXISTS school_courses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (school_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS school_rooms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  course_id INTEGER NOT NULL REFERENCES school_courses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (school_id, course_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS enrollments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  school_id INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  course_id INTEGER REFERENCES school_courses(id) ON DELETE SET NULL,
+  room_id INTEGER REFERENCES school_rooms(id) ON DELETE SET NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited','active')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_enrollments_student ON enrollments(student_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_user ON enrollments(user_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_school ON enrollments(school_id);
 
 CREATE TABLE IF NOT EXISTS company_profiles (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -77,6 +112,7 @@ CREATE TABLE IF NOT EXISTS company_profiles (
   industry TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   address TEXT NOT NULL DEFAULT '',
+  logo TEXT NOT NULL DEFAULT '',
   lat REAL,
   lng REAL
 );
@@ -199,6 +235,7 @@ export async function initSchema() {
       `CREATE TABLE IF NOT EXISTS schools (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) NOT NULL UNIQUE,
+        logo VARCHAR(500) NOT NULL DEFAULT '',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       `CREATE TABLE IF NOT EXISTS school_coordinators (
@@ -213,6 +250,7 @@ export async function initSchema() {
         school_id INT NULL,
         course VARCHAR(255) NOT NULL DEFAULT '',
         year_level VARCHAR(50) NOT NULL DEFAULT '',
+        student_id VARCHAR(100) NOT NULL DEFAULT '',
         phone VARCHAR(50) NOT NULL DEFAULT '',
         search_city VARCHAR(255) NOT NULL DEFAULT '',
         search_lat DOUBLE NULL,
@@ -220,12 +258,47 @@ export async function initSchema() {
         CONSTRAINT fk_ap_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         CONSTRAINT fk_ap_school FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS school_courses (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        school_id INT NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_sc_school (school_id, name),
+        CONSTRAINT fk_sc_school2 FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS school_rooms (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        school_id INT NOT NULL,
+        course_id INT NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_sr_course (school_id, course_id, name),
+        CONSTRAINT fk_sr_school FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+        CONSTRAINT fk_sr_course FOREIGN KEY (course_id) REFERENCES school_courses(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS enrollments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        school_id INT NOT NULL,
+        course_id INT NULL,
+        room_id INT NULL,
+        user_id INT NULL,
+        student_id VARCHAR(100) NOT NULL,
+        name VARCHAR(255) NOT NULL DEFAULT '',
+        status ENUM('invited','active') NOT NULL DEFAULT 'invited',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_enrollments_student (student_id),
+        CONSTRAINT fk_enr_school FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+        CONSTRAINT fk_enr_course FOREIGN KEY (course_id) REFERENCES school_courses(id) ON DELETE SET NULL,
+        CONSTRAINT fk_enr_room FOREIGN KEY (room_id) REFERENCES school_rooms(id) ON DELETE SET NULL,
+        CONSTRAINT fk_enr_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       `CREATE TABLE IF NOT EXISTS company_profiles (
         user_id INT PRIMARY KEY,
         company_name VARCHAR(255) NOT NULL DEFAULT '',
         industry VARCHAR(255) NOT NULL DEFAULT '',
         description TEXT,
         address VARCHAR(500) NOT NULL DEFAULT '',
+        logo VARCHAR(500) NOT NULL DEFAULT '',
         lat DOUBLE NULL,
         lng DOUBLE NULL,
         CONSTRAINT fk_cp_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -347,7 +420,8 @@ const NEW_USER_COLUMNS = [
   ['address', "VARCHAR(500) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"],
   ['birthdate', "VARCHAR(10) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"],
   ['gender', "VARCHAR(20) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"],
-  ['is_verified', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0']
+  ['is_verified', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['avatar', "VARCHAR(500) NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''"]
 ]
 
 async function migrateSchema() {
@@ -376,6 +450,20 @@ async function migrateSchema() {
     } catch (err) {
       if (err?.code === 'ER_DUP_FIELDNAME') return
       throw err
+    }
+    for (const table of ['company_profiles', 'schools']) {
+      try {
+        await db.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS logo VARCHAR(500) NOT NULL DEFAULT ''`)
+      } catch (err) {
+        if (err?.code === 'ER_DUP_FIELDNAME') continue
+        throw err
+      }
+    }
+    try {
+      await db.query(`ALTER TABLE applicant_profiles ADD COLUMN IF NOT EXISTS student_id VARCHAR(100) NOT NULL DEFAULT ''`)
+    } catch (err) {
+      if (err?.code === 'ER_DUP_FIELDNAME') throw err
+      if (err?.code === 'ER_DUP_KEYNAME') throw err
     }
     const REQ_FILE_COLUMNS = [
       ['file_name', "VARCHAR(255) NOT NULL DEFAULT ''"],
@@ -416,10 +504,11 @@ async function migrateSchema() {
         birthdate TEXT NOT NULL DEFAULT '',
         gender TEXT NOT NULL DEFAULT '',
         is_verified INTEGER NOT NULL DEFAULT 0,
+        avatar TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );`)
-      db.exec(`INSERT INTO users (id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, created_at)
-        SELECT id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, created_at FROM users_old;`)
+      db.exec(`INSERT INTO users (id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, avatar, created_at)
+        SELECT id, name, email, username, password_hash, role, phone, address, birthdate, gender, is_verified, avatar, created_at FROM users_old;`)
       db.exec('DROP TABLE users_old;')
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username ON users(username);')
       db.exec('PRAGMA foreign_keys = ON;')
@@ -448,7 +537,7 @@ async function migrateSchema() {
       db.exec('DROP TABLE account_requests_old;')
       db.exec('PRAGMA foreign_keys = ON;')
     }
-    const reqCols = db.prepare('PRAGMA table_info(account_requests)').all().map((c) => c.name)
+const reqCols = db.prepare('PRAGMA table_info(account_requests)').all().map((c) => c.name)
     const REQ_FILE_COLS_SQLITE = [
       ['file_name', "TEXT NOT NULL DEFAULT ''"],
       ['file_path', "TEXT NOT NULL DEFAULT ''"],
@@ -459,9 +548,15 @@ async function migrateSchema() {
       ['file2_mime', "TEXT NOT NULL DEFAULT ''"],
       ['file2_size', 'INTEGER NOT NULL DEFAULT 0']
     ]
-for (const [col, def] of REQ_FILE_COLS_SQLITE) {
+    for (const [col, def] of REQ_FILE_COLS_SQLITE) {
       if (!reqCols.includes(col)) db.exec(`ALTER TABLE account_requests ADD COLUMN ${col} ${def}`)
     }
+    const apCols = db.prepare('PRAGMA table_info(applicant_profiles)').all().map((c) => c.name)
+    if (!apCols.includes('student_id')) db.exec("ALTER TABLE applicant_profiles ADD COLUMN student_id TEXT NOT NULL DEFAULT ''")
+    const cpCols = db.prepare('PRAGMA table_info(company_profiles)').all().map((c) => c.name)
+    if (!cpCols.includes('logo')) db.exec("ALTER TABLE company_profiles ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
+    const schCols = db.prepare('PRAGMA table_info(schools)').all().map((c) => c.name)
+    if (!schCols.includes('logo')) db.exec("ALTER TABLE schools ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
 
   }
   if (DB_MODE === 'mysql') {

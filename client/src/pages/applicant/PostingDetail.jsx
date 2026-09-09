@@ -16,6 +16,7 @@ export default function PostingDetail() {
   const [cover, setCover] = useState('')
   const [modal, setModal] = useState(false)
   const [applying, setApplying] = useState(false)
+  const [resume, setResume] = useState(null)
 
   useEffect(() => {
     api(`/postings/${id}`, { token })
@@ -23,9 +24,21 @@ export default function PostingDetail() {
       .catch((e) => toast.error(e.message))
   }, [id, token])
 
+  useEffect(() => {
+    if (user?.role === 'applicant') {
+      api('/resume/my', { token }).then(setResume).catch(() => {})
+    }
+  }, [token, user?.role])
+
   if (!posting) return <Spinner />
 
   const alreadyApplied = !!posting.applied_status
+
+  const hasResume = resume
+    ? !!(String(resume.data?.summary || '').trim() || (resume.data?.skills?.length) || (resume.data?.education?.length) || (resume.data?.experience?.length))
+    : false
+
+  const resumeFileName = `Resume_${(user?.name || 'Applicant').replace(/[^a-zA-Z ]/g, '').split(' ').slice(0, 2).join('_')}.pdf`
 
   const apply = async () => {
     const ok = await confirm({
@@ -62,7 +75,7 @@ export default function PostingDetail() {
         <div className="detail-main">
           <div className="card job-hero">
             <div className="job-card-top">
-              <div className="job-logo lg">{posting.company_name?.charAt(0).toUpperCase()}</div>
+              <div className="job-logo lg">{posting.company_logo ? <img src={posting.company_logo} alt={posting.company_name} /> : posting.company_name?.charAt(0).toUpperCase()}</div>
               <div className="job-title-wrap">
                 <h1>{posting.title}</h1>
                 <span className="muted">
@@ -137,7 +150,28 @@ export default function PostingDetail() {
             onChange={(e) => setCover(e.target.value)}
           />
         </label>
-        <p className="muted small">Your saved resume (from the Resume Builder) is attached automatically with your application. You can send more documents through the chat after applying.</p>
+        <div className={`attach-box ${hasResume ? 'has-file' : ''}`}>
+          {hasResume ? (
+            <>
+              <span className="attach-icon">📎</span>
+              <div className="attach-meta">
+                <b>{resumeFileName}</b>
+                <span className="muted small">from your Resume Builder — attached to this application so the company can review it</span>
+              </div>
+              <span className="attach-chip">Attached</span>
+            </>
+          ) : (
+            <>
+              <span className="attach-icon">📄</span>
+              <div className="attach-meta">
+                <b>No resume saved yet</b>
+                <span className="muted small">Build your resume in the Resume Builder so it's attached to this application.</span>
+              </div>
+              <Link className="btn btn-ghost btn-sm" to="/app/resume">Build resume</Link>
+            </>
+          )}
+        </div>
+        <p className="muted small">You can also send more documents through the chat after applying.</p>
         <button className="btn btn-primary btn-block" onClick={apply} disabled={applying}>
           {applying ? 'Submitting…' : 'Submit application'}
         </button>

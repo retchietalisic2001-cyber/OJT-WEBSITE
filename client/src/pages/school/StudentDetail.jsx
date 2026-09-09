@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
 import { api, fmtDate } from '../../api.js'
 import { Spinner, StatusBadge, Timeline, emptyState } from '../../components/ui.jsx'
+import { useConfirm } from '../../confirm.jsx'
+import { toast } from '../../toast.jsx'
 
 export default function StudentDetail() {
   const { id } = useParams()
   const { token } = useAuth()
+  const confirm = useConfirm()
+  const navigate = useNavigate()
   const [stu, setStu] = useState(null)
   const [verify, setVerify] = useState(null)
 
@@ -32,6 +36,24 @@ export default function StudentDetail() {
   }
 
   if (stu.error) return <div className="card card-pad">{emptyState('Student not found')}</div>
+
+  const untrack = async () => {
+    if (!stu.enrollment_id) return toast.error('This student is not in a tracked course/room yet')
+    const ok = await confirm({
+      title: `Stop tracking ${stu.name}?`,
+      message: 'This removes their course/room placement from your school.',
+      confirmLabel: 'Remove',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await api(`/schools/enrollments/${stu.enrollment_id}`, { method: 'DELETE', token })
+      toast.success('Student removed')
+      navigate('/school')
+    } catch (err) {
+      toast.error(err.message)
+    }
+  }
 
   return (
     <div className="page">
@@ -80,6 +102,17 @@ export default function StudentDetail() {
         </div>
 
         <div className="detail-side">
+          {stu.enrollment_id && (
+            <div className="card card-pad">
+              <h3>🗂️ Placement</h3>
+              <div className="placement-info">
+                <p><span>Student ID</span><strong>🪪 {stu.student_id || '—'}</strong></p>
+                <p><span>Course</span><strong>{stu.enrolled_course || 'Unassigned'}</strong></p>
+                <p><span>Room</span><strong>{stu.enrolled_room || '—'}</strong></p>
+              </div>
+              <button className="btn btn-sm btn-danger btn-block mt" onClick={untrack}>Remove from tracking</button>
+            </div>
+          )}
           {stu.applications?.map((a) =>
             a.status_history?.length ? (
               <div key={a.id} className="card card-pad">

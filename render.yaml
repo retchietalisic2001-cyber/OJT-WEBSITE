@@ -41,8 +41,8 @@ services:
       - key: YAHOO_CLIENT_SECRET
         sync: false
     # NOTE: Render's free plan does NOT support persistent disks.
-    # Without a disk, SQLite data resets on each redeploy — but SEED_ON_START=true
-    # re-seeds demo data automatically, so the app stays usable as a free demo.
+    # Without a disk, SQLite data resets on each redeploy — SEED_ON_START=true
+    # recreates the administrator account automatically, so login always works.
     # For real persistence: upgrade the instance, or set DB_MODE=mysql and point
     # at an external MySQL host (e.g. a free InfinityFree MySQL database).
     # disk:

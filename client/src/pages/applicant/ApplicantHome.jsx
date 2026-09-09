@@ -8,11 +8,15 @@ import MapView from '../../components/MapView.jsx'
 export default function ApplicantHome() {
   const { token, user } = useAuth()
   const [recs, setRecs] = useState(null)
+  const [placement, setPlacement] = useState(null)
 
   useEffect(() => {
     api('/recommendations', { token })
       .then(setRecs)
       .catch(() => setRecs([]))
+    api('/schools/my-placement', { token })
+      .then(setPlacement)
+      .catch(() => setPlacement(null))
   }, [token])
 
   if (!recs) return <Spinner />
@@ -44,6 +48,24 @@ export default function ApplicantHome() {
             'Let us know your course and preferred area so we can recommend companies that fit you.',
             <Link className="btn btn-primary" to="/app/profile">Complete my profile</Link>
           )}
+        </div>
+      )}
+
+      {placement?.enrollment && (
+        <div className="card card-pad placement-banner">
+          <div className="placement-inline">
+            <div className="school-logo">
+              {placement.enrollment.logo ? <img src={placement.enrollment.logo} alt={placement.enrollment.school_name} /> : '🏫'}
+            </div>
+            <div>
+              <h3>🎓 Placed by your school</h3>
+              <p className="muted">
+                {placement.enrollment.school_name} · <strong>{placement.enrollment.course_name || 'Unassigned'}</strong>
+                {placement.enrollment.room_name ? ` → 🚪 ${placement.enrollment.room_name}` : ''}
+                <span className="muted small"> · Student ID 🪪 {placement.student_id || placement.enrollment.student_id}</span>
+              </p>
+            </div>
+          </div>
         </div>
       )}
 

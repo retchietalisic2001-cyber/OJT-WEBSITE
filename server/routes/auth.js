@@ -1,8 +1,12 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
-import { get, run, COURSES, YEAR_LEVELS } from '../db.js'
-import { signToken, requireAuth } from '../middleware/auth.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { get, run, UPLOADS_DIR, COURSES, YEAR_LEVELS } from '../db.js'
+import { signToken, requireAuth, requireRole } from '../middleware/auth.js'
+import { upload } from '../middleware/upload.js'
 import { profileFor, findOrCreateSchool } from '../services/users.js'
+import { matchEnrollmentByStudentId } from './schools.js'
 
 const router = Router()
 
@@ -21,7 +25,7 @@ async function sendAuth(res, user) {
 
 router.post('/register', async (req, res, next) => {
   try {
-    const { name, email, password, role, schoolName, schoolId, course, yearLevel, phone, username, address, birthdate, gender } = req.body || {}
+    const { name, email, password, role, schoolName, schoolId, course, yearLevel, studentId, phone, username, address, birthdate, gender } = req.body || {}
 
     if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' })
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' })
@@ -57,13 +61,20 @@ router.post('/register', async (req, res, next) => {
       school = await findOrCreateSchool(schoolName)
     }
     await run(
-      'INSERT INTO applicant_profiles (user_id, school_id, course, year_level, phone) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO applicant_profiles (user_id, school_id, course, year_level, student_id, phone) VALUES (?, ?, ?, ?, ?, ?)',
       id,
       school?.id ?? null,
       course && course.trim() ? course.trim() : '',
       YEAR_LEVELS.includes(yearLevel) ? yearLevel : '',
+      String(studentId || '').trim(),
       String(phone || '').trim()
     )
+
+    if (studentId) {
+      try {
+        await matchEnrollmentByStudentId(id, studentId)
+      } catch {}
+    }
 
     const user = { id, name: name.trim(), email: email.trim().toLowerCase(), role, username: uname, phone: String(phone || '').trim(), address: String(address || '').trim(), birthdate: String(birthdate || '').trim(), gender: String(gender || '').trim() }
     await sendAuth(res, user)
@@ -94,6 +105,71 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json(await profileFor(user))
 })
 
+router.put(
+  '/avatar',
+  requireAuth,
+  upload.single('avatar'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Please choose an image to upload' })
+    if (!String(req.file.mimetype).startsWith('image/'))
+      return res.status(400).json({ error: 'Profile picture must be an image (PNG, JPG, WebP or GIF)' })
+
+    const prev = (await get('SELECT avatar FROM users WHERE id = ?', req.user.id))?.avatar || ''
+    await run('UPDATE users SET avatar = ? WHERE id = ?', `/uploads/${req.file.filename}`, req.user.id)
+
+    if (prev && prev.startsWith('/uploads/')) {
+      const oldFile = path.join(UPLOADS_DIR, path.basename(prev))
+      try {
+        fs.unlinkSync(oldFile)
+      } catch {}
+    }
+
+    const user = await get('SELECT * FROM users WHERE id = ?', req.user.id)
+    res.json(await profileFor(user))
+  },
+  (err, req, res, next) => {
+    if (err) return res.status(400).json({ error: err.message })
+    next()
+  }
+)
+
+router.put(
+  '/logo',
+  requireAuth,
+  requireRole('company', 'school'),
+  upload.single('logo'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Please choose an image to upload' })
+    if (!String(req.file.mimetype).startsWith('image/'))
+      return res.status(400).json({ error: 'Logo must be an image (PNG, JPG, WebP or GIF)' })
+
+    let prev = ''
+    if (req.user.role === 'company') {
+      prev = (await get('SELECT logo FROM company_profiles WHERE user_id = ?', req.user.id))?.logo || ''
+      await run('UPDATE company_profiles SET logo = ? WHERE user_id = ?', `/uploads/${req.file.filename}`, req.user.id)
+    } else {
+      const coord = await get('SELECT * FROM school_coordinators WHERE user_id = ?', req.user.id)
+      if (!coord?.school_id) return res.status(400).json({ error: 'Link your school in your profile before uploading its logo' })
+      prev = (await get('SELECT logo FROM schools WHERE id = ?', coord.school_id))?.logo || ''
+      await run('UPDATE schools SET logo = ? WHERE id = ?', `/uploads/${req.file.filename}`, coord.school_id)
+    }
+
+    if (prev && prev.startsWith('/uploads/')) {
+      const oldFile = path.join(UPLOADS_DIR, path.basename(prev))
+      try {
+        fs.unlinkSync(oldFile)
+      } catch {}
+    }
+
+    const user = await get('SELECT * FROM users WHERE id = ?', req.user.id)
+    res.json(await profileFor(user))
+  },
+  (err, req, res, next) => {
+    if (err) return res.status(400).json({ error: err.message })
+    next()
+  }
+)
+
 router.put('/profile', requireAuth, async (req, res) => {
   const user = await get('SELECT * FROM users WHERE id = ?', req.user.id)
   const p = req.body || {}
@@ -104,18 +180,27 @@ router.put('/profile', requireAuth, async (req, res) => {
     let schoolId = (await get('SELECT school_id FROM applicant_profiles WHERE user_id = ?', user.id))?.school_id ?? null
     if (p.schoolId) schoolId = Number(p.schoolId)
     else if (p.schoolName) schoolId = (await findOrCreateSchool(p.schoolName)).id
+    const prevStudentId = (await get('SELECT student_id FROM applicant_profiles WHERE user_id = ?', user.id))?.student_id || ''
+    const newStudentId = String(p.studentId ?? prevStudentId).trim()
 
     await run(
-      `UPDATE applicant_profiles SET school_id=?, course=?, year_level=?, phone=?, search_city=?, search_lat=?, search_lng=? WHERE user_id=?`,
+      `UPDATE applicant_profiles SET school_id=?, course=?, year_level=?, student_id=?, phone=?, search_city=?, search_lat=?, search_lng=? WHERE user_id=?`,
       schoolId,
       course,
       yearLevel,
+      newStudentId,
       String(p.phone ?? '').trim(),
       String(p.searchCity ?? '').trim(),
       p.searchLat != null ? Number(p.searchLat) : null,
       p.searchLng != null ? Number(p.searchLng) : null,
       user.id
     )
+
+    if (newStudentId) {
+      try {
+        await matchEnrollmentByStudentId(user.id, newStudentId)
+      } catch {}
+    }
   }
 
   if (user.role === 'company') {
