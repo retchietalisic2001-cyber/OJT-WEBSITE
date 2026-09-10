@@ -14,7 +14,8 @@ async function emailTaken(email) {
   return !!(await get('SELECT id FROM users WHERE lower(email) = lower(?)', email))
 }
 
-async function usernameTaken(username) {
+async function usernameTaken(username, excludeId) {
+  if (excludeId) return !!(await get('SELECT id FROM users WHERE lower(username) = lower(?) AND id != ?', username, excludeId))
   return !!(await get('SELECT id FROM users WHERE lower(username) = lower(?)', username))
 }
 
@@ -269,7 +270,7 @@ router.put('/profile', requireAuth, async (req, res) => {
   if (p.username !== undefined) {
     const nu = String(p.username || '').trim()
     if (nu.length < 3) return res.status(400).json({ error: 'Username must be at least 3 characters' })
-    if (await usernameTaken(nu)) return res.status(409).json({ error: 'That username is already taken' })
+    if (await usernameTaken(nu, user.id)) return res.status(409).json({ error: 'That username is already taken' })
     await run('UPDATE users SET username = ? WHERE id = ?', nu, user.id)
   }
   await run(

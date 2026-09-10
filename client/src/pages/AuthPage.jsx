@@ -115,7 +115,7 @@ export default function AuthPage() {
         {...props}
       />
       <button type="button" className="pwd-toggle" aria-label="Toggle password visibility" onClick={() => setShow((s) => ({ ...s, [k]: !s[k] }))}>
-        {show[k] ? EYE_OFF : EYE_ON}
+        {show[k] ? EYE_ON : EYE_OFF}
       </button>
     </div>
   )

@@ -75,6 +75,7 @@ router.get('/requests', async (req, res, next) => {
 router.patch('/requests/:id', async (req, res, next) => {
   try {
     const status = req.body?.status
+    const declineReason = String(req.body?.declineReason || '').trim()
     if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' })
     const id = Number(req.params.id)
     const existing = await get('SELECT * FROM account_requests WHERE id = ?', id)
@@ -88,7 +89,11 @@ router.patch('/requests/:id', async (req, res, next) => {
         const email = String(details.email || '').trim()
 
         await transaction(async (tx) => {
-          await tx.run('UPDATE account_requests SET status = ? WHERE id = ?', status, id)
+          if (status === 'rejected' && declineReason) {
+            await tx.run('UPDATE account_requests SET status = ?, decline_reason = ? WHERE id = ?', status, declineReason, id)
+          } else {
+            await tx.run('UPDATE account_requests SET status = ? WHERE id = ?', status, id)
+          }
           if (status === 'approved' && email) {
             await tx.run('UPDATE users SET is_verified = 1 WHERE lower(email) = lower(?)', email)
           }
@@ -99,7 +104,8 @@ router.patch('/requests/:id', async (req, res, next) => {
             to: email,
             kind: existing.kind,
             orgName: details.company || details.school || '',
-            status
+            status,
+            declineReason: status === 'rejected' ? declineReason : ''
           })
         }
       } else {

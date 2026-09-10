@@ -35,7 +35,8 @@ router.get('/', requireAuth, async (req, res) => {
 
   let rows = await all(
     `SELECT p.*, c.company_name, c.industry, c.logo AS company_logo,
-            (SELECT COUNT(*) FROM verifications v WHERE v.user_id = c.user_id AND v.status = 'approved') AS verified_count
+            (SELECT COUNT(*) FROM verifications v WHERE v.user_id = c.user_id AND v.status = 'approved') AS verified_count,
+            (SELECT COUNT(*) FROM applications a WHERE a.posting_id = p.id AND a.status = 'accepted') AS accepted_count
      FROM postings p JOIN company_profiles c ON c.user_id = p.company_id
      WHERE p.status = 'open'`
   )
@@ -60,7 +61,7 @@ router.get('/', requireAuth, async (req, res) => {
       p.lat != null && lat != null && lng != null ? haversineKm(lat, lng, p.lat, p.lng) : null
     if (radiusKm != null && dist != null && dist > radiusKm) continue
 
-    result.push({ ...p, is_verified: Boolean(p.verified_count), distance_km: dist, open_slots: Math.max(0, (p.slots || 0)), course_tags: tags })
+    result.push({ ...p, is_verified: Boolean(p.verified_count), distance_km: dist, open_slots: Math.max(0, (p.slots || 0) - (p.accepted_count || 0)), course_tags: tags })
   }
 
   let appliedMap = new Map()

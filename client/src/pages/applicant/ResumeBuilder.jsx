@@ -83,7 +83,8 @@ export default function ResumeBuilder() {
   useEffect(() => {
     api('/resume/my', { token }).then((r) => {
       const draft = loadDraft()
-      if (draft && r.data === EMPTY && (draft.summary || draft.skills?.length || draft.education?.length || draft.experience?.length)) {
+      const isEmpty = r.data && !r.data.summary && (!r.data.skills || !r.data.skills.length) && (!r.data.education || !r.data.education.length) && (!r.data.experience || !r.data.experience.length)
+      if (draft && isEmpty && (draft.summary || draft.skills?.length || draft.education?.length || draft.experience?.length)) {
         setResume({ ...r, data: { ...EMPTY, ...draft } })
         setSkills(draft.skills || [])
         setDraftRestored(true)

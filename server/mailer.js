@@ -16,7 +16,7 @@ const transport = HOST
     })
   : null
 
-function accountRequestEmail({ to, kind, orgName, status }) {
+function accountRequestEmail({ to, kind, orgName, status, declineReason }) {
   const role = kind === 'school' ? 'school' : 'company'
   const who = orgName || (kind === 'school' ? 'your school' : 'your company')
   if (status === 'approved') {
@@ -32,12 +32,14 @@ Thank you,
 The OJT Connect Team`
     }
   }
+  const reasonBlock = declineReason
+    ? `\n\nReason for decline: ${declineReason}\n`
+    : ''
   return {
     subject: 'Update on your OJT Connect account request',
     text: `Hello,
 
-We're sorry, but your ${role} account request (${who}) was DECLINED by our administrator.
-
+We're sorry, but your ${role} account request (${who}) was DECLINED by our administrator.${reasonBlock}
 If you believe this is a mistake, or if you have any questions, please reach out to us through the "Chat with us" widget on the OJT Connect website and our support team will assist you. You may also submit a new request with updated documents.
 
 Thank you,

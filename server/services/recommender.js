@@ -46,7 +46,8 @@ function reasonFor(parts, posting, profile, dist, openSlots, skills, matchedSkil
 
 export async function recommendPostings(profile, limit = 6) {
   const postings = await all(`
-    SELECT p.*, c.company_name, c.industry, c.lat AS company_lat, c.lng AS company_lng
+    SELECT p.*, c.company_name, c.industry, c.lat AS company_lat, c.lng AS company_lng,
+           (SELECT COUNT(*) FROM applications a WHERE a.posting_id = p.id AND a.status = 'accepted') AS accepted_count
     FROM postings p
     JOIN company_profiles c ON c.user_id = p.company_id
     WHERE p.status = 'open'
@@ -71,7 +72,8 @@ export async function recommendPostings(profile, limit = 6) {
         .map((t) => t.trim())
         .filter(Boolean)
       const dist = p.lat != null && lat != null && lng != null ? haversineKm(lat, lng, p.lat, p.lng) : null
-      const openSlots = (p.slots || 0) - p.filled
+      const acceptedCount = p.accepted_count ?? 0
+      const openSlots = (p.slots || 0) - acceptedCount
       const haystack = `${p.title || ''} ${p.description || ''} ${p.requirements || ''}`
 
       const parts = []

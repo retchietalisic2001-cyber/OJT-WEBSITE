@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { UPLOADS_DIR } from '../db.js'
+import { requireAuth } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -105,7 +106,7 @@ function extractPptxText(buf) {
   return parts.filter(Boolean).map((p, i) => `— Slide ${i + 1} —\n${p}`).join('\n\n')
 }
 
-router.get('/', async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
     const raw = String(req.query.path || '').split(/[\\/]/).pop()
     if (!raw) return res.status(400).json({ error: 'Missing file' })

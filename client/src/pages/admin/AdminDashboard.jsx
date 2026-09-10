@@ -313,6 +313,54 @@ const REQ_META = {
   rejected: { label: 'Rejected', cls: 'rejected' }
 }
 
+function DeclineModal({ request, onClose, onConfirm }) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  if (!request) return null
+  const d = request.details || {}
+  const who = d.company || d.school || 'this requester'
+
+  const submit = async () => {
+    const trimmed = reason.trim()
+    if (trimmed.length < 3) {
+      setError('Please enter a reason (at least 3 characters). This is included in the notification email.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await onConfirm(trimmed)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Decline ${request.kind} account request`}>
+      <p className="muted" style={{ marginBottom: 12 }}>
+        You are declining the request from <strong>{who}</strong>. The reason below will be included in the notification email sent to the requester, so please be specific.
+      </p>
+      <label className="field">
+        Reason for declining
+        <textarea
+          className="input textarea"
+          rows={4}
+          autoFocus
+          placeholder="e.g. The submitted documents are unreadable — please resubmit a clearer copy of your business registration."
+          value={reason}
+          onChange={(e) => { setReason(e.target.value); if (error) setError('') }}
+        />
+      </label>
+      {error && <p className="error-text" style={{ color: 'var(--danger, #E5484D)', marginTop: 8 }}>{error}</p>}
+      <div className="form-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+        <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="btn btn-danger" onClick={submit} disabled={busy}>{busy ? 'Declining…' : '✕ Decline request'}</button>
+      </div>
+    </Modal>
+  )
+}
+
 const REQ_FIELDS = {
   company: [
     ['company', 'Company name'],
@@ -358,6 +406,11 @@ function RequestCard({ r, onStatus, onApprove, onDecline, onDelete }) {
               </button>
             </div>
           )}
+          {r.status === 'rejected' && r.decline_reason && (
+            <div className="req-field">
+              <span>Decline reason:</span> <strong>{r.decline_reason}</strong>
+            </div>
+          )}
         </div>
       </div>
       <div className="admin-row-meta req-actions">
@@ -366,17 +419,6 @@ function RequestCard({ r, onStatus, onApprove, onDecline, onDelete }) {
             <button className="btn btn-sm btn-primary" onClick={() => onApprove(r)}>✓ Approve</button>
             <button className="btn btn-sm btn-danger" onClick={() => onDecline(r)}>✕ Decline</button>
           </>
-        )}
-        {r.status === 'pending' && (
-          <button className="btn btn-sm btn-ghost" onClick={async () => {
-            const ok = await confirm({
-              title: 'Mark as contacted?',
-              message: 'This request will be marked "Contacted" — indicating you have reached out to the requester.',
-              confirmLabel: 'Mark contacted',
-              danger: false
-            })
-            if (ok) onStatus(r.id, 'contacted')
-          }}>Mark contacted</button>
         )}
         {r.status === 'contacted' && (
           <button className="btn btn-sm btn-ghost" onClick={async () => {
@@ -423,6 +465,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [approveTarget, setApproveTarget] = useState(null)
+  const [declineTarget, setDeclineTarget] = useState(null)
 
   const load = async () => {
     try {
@@ -495,15 +538,20 @@ export default function AdminDashboard() {
   }
 
   const declineRequest = async (r) => {
+    setDeclineTarget(r)
+  }
+
+  const confirmDecline = async (reason) => {
     const ok = await confirm({
       title: 'Decline this request?',
-      message: `The ${r.kind} account request from "${(r.details || {}).company || (r.details || {}).school || 'this requester'}" will be declined. They will receive a notification email and will not get an account.`,
+      message: `The ${declineTarget.kind} account request from "${(declineTarget.details || {}).company || (declineTarget.details || {}).school || 'this requester'}" will be declined. They will receive an email with your reason: "${reason}". This cannot be undone.`,
       confirmLabel: 'Decline'
     })
     if (!ok) return
     try {
-      await api(`/support/requests/${r.id}`, { method: 'PATCH', token, body: { status: 'rejected' } })
+      await api(`/support/requests/${declineTarget.id}`, { method: 'PATCH', token, body: { status: 'rejected', declineReason: reason } })
       toast.success('Request declined')
+      setDeclineTarget(null)
       load()
     } catch (err) {
       toast.error(err.message)
@@ -684,6 +732,12 @@ export default function AdminDashboard() {
           />
         ))}
       </Modal>
+
+      <DeclineModal
+        request={declineTarget}
+        onClose={() => setDeclineTarget(null)}
+        onConfirm={confirmDecline}
+      />
     </div>
   )
 }

@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS account_requests (
   file2_path TEXT NOT NULL DEFAULT '',
   file2_mime TEXT NOT NULL DEFAULT '',
   file2_size INTEGER NOT NULL DEFAULT 0,
+  decline_reason TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -411,6 +412,7 @@ export async function initSchema() {
         file2_path VARCHAR(500) NOT NULL DEFAULT '',
         file2_mime VARCHAR(150) NOT NULL DEFAULT '',
         file2_size INT NOT NULL DEFAULT 0,
+        decline_reason TEXT NOT NULL DEFAULT '',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       `CREATE TABLE IF NOT EXISTS verifications (
@@ -468,7 +470,7 @@ async function migrateSchema() {
   if (DB_MODE === 'mysql') {
     for (const [col, mysqlDef] of NEW_USER_COLUMNS) {
       try {
-        await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col} ${mysqlDef}`)
+        await db.query(`ALTER TABLE users ADD COLUMN ${col} ${mysqlDef}`)
       } catch (err) {
         if (err?.code === 'ER_DUP_FIELDNAME') continue
         throw err
@@ -493,35 +495,31 @@ async function migrateSchema() {
     }
     for (const table of ['company_profiles', 'schools']) {
       try {
-        await db.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS logo VARCHAR(500) NOT NULL DEFAULT ''`)
+        await db.query(`ALTER TABLE ${table} ADD COLUMN logo VARCHAR(500) NOT NULL DEFAULT ''`)
       } catch (err) {
         if (err?.code === 'ER_DUP_FIELDNAME') continue
         throw err
       }
     }
     try {
-      await db.query(`ALTER TABLE applicant_profiles ADD COLUMN IF NOT EXISTS student_id VARCHAR(100) NOT NULL DEFAULT ''`)
+      await db.query(`ALTER TABLE applicant_profiles ADD COLUMN student_id VARCHAR(100) NOT NULL DEFAULT ''`)
     } catch (err) {
-      if (err?.code === 'ER_DUP_FIELDNAME') throw err
-      if (err?.code === 'ER_DUP_KEYNAME') throw err
+      if (err?.code !== 'ER_DUP_FIELDNAME') throw err
     }
     try {
-      await db.query(`ALTER TABLE applicant_profiles ADD COLUMN IF NOT EXISTS search_radius DOUBLE NOT NULL DEFAULT 25`)
+      await db.query(`ALTER TABLE applicant_profiles ADD COLUMN search_radius DOUBLE NOT NULL DEFAULT 25`)
     } catch (err) {
-      if (err?.code === 'ER_DUP_FIELDNAME') throw err
-      if (err?.code === 'ER_DUP_KEYNAME') throw err
+      if (err?.code !== 'ER_DUP_FIELDNAME') throw err
     }
     try {
-      await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS email VARCHAR(255) NOT NULL DEFAULT ''`)
+      await db.query(`ALTER TABLE enrollments ADD COLUMN email VARCHAR(255) NOT NULL DEFAULT ''`)
     } catch (err) {
-      if (err?.code === 'ER_DUP_FIELDNAME') throw err
-      if (err?.code === 'ER_DUP_KEYNAME') throw err
+      if (err?.code !== 'ER_DUP_FIELDNAME') throw err
     }
     try {
-      await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS invite_action VARCHAR(20) NOT NULL DEFAULT ''`)
+      await db.query(`ALTER TABLE enrollments ADD COLUMN invite_action VARCHAR(20) NOT NULL DEFAULT ''`)
     } catch (err) {
-      if (err?.code === 'ER_DUP_FIELDNAME') throw err
-      if (err?.code === 'ER_DUP_KEYNAME') throw err
+      if (err?.code !== 'ER_DUP_FIELDNAME') throw err
     }
     const REQ_FILE_COLUMNS = [
       ['file_name', "VARCHAR(255) NOT NULL DEFAULT ''"],
@@ -589,6 +587,7 @@ async function migrateSchema() {
         file2_path TEXT NOT NULL DEFAULT '',
         file2_mime TEXT NOT NULL DEFAULT '',
         file2_size INTEGER NOT NULL DEFAULT 0,
+        decline_reason TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );`)
       db.exec(`INSERT INTO account_requests (id, kind, details, status, created_at)
@@ -610,6 +609,7 @@ const reqCols = db.prepare('PRAGMA table_info(account_requests)').all().map((c) 
     for (const [col, def] of REQ_FILE_COLS_SQLITE) {
       if (!reqCols.includes(col)) db.exec(`ALTER TABLE account_requests ADD COLUMN ${col} ${def}`)
     }
+    if (!reqCols.includes('decline_reason')) db.exec("ALTER TABLE account_requests ADD COLUMN decline_reason TEXT NOT NULL DEFAULT ''")
     const apCols = db.prepare('PRAGMA table_info(applicant_profiles)').all().map((c) => c.name)
     if (!apCols.includes('student_id')) db.exec("ALTER TABLE applicant_profiles ADD COLUMN student_id TEXT NOT NULL DEFAULT ''")
     if (!apCols.includes('search_radius')) db.exec('ALTER TABLE applicant_profiles ADD COLUMN search_radius REAL NOT NULL DEFAULT 25')

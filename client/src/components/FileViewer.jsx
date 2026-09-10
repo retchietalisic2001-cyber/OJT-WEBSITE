@@ -23,7 +23,6 @@ export default function FileViewer({ files = [], index = 0, onClose }) {
   }, [index, files.length])
 
   const file = files[i]
-  const pendingLoad = !file || (preview && preview.path === (file.file_path || ''))
 
   useEffect(() => {
     if (!file) return

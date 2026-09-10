@@ -45,10 +45,21 @@ async function findOrCreateSocialUser(provider, email, name) {
 }
 
 function makeVerify(provider) {
-  return async (a, b, c) => {
+  if (provider === 'yahoo') {
+    return async (issuer, uiProfile, jwtClaims, idToken, profile, done) => {
+      try {
+        const email = profile?.emails?.[0]?.value || profile?.emails?.[0]
+        const name = profile?.displayName || profile?.name?.givenName || ''
+        const user = await findOrCreateSocialUser(provider, email, name)
+        if (!user) return done(new Error('We could not retrieve an email from your account.'), null)
+        done(null, user)
+      } catch (err) {
+        done(err, null)
+      }
+    }
+  }
+  return async (accessToken, refreshToken, profile, done) => {
     try {
-      const profile = provider === 'yahoo' ? b : a
-      const done = provider === 'yahoo' ? c : b
       const email = profile?.emails?.[0]?.value || profile?.emails?.[0]
       const name = profile?.displayName || profile?.name?.givenName || ''
       const user = await findOrCreateSocialUser(provider, email, name)

@@ -67,7 +67,7 @@ export default function ChangePassword() {
                   autoComplete="current-password"
                 />
                 <button type="button" className="pwd-toggle" aria-label="Toggle password visibility" onClick={() => setShow((s) => ({ ...s, current: !s.current }))}>
-                  {show.current ? EYE_OFF : EYE_ON}
+                  {show.current ? EYE_ON : EYE_OFF}
                 </button>
               </div>
             </label>
@@ -85,7 +85,7 @@ export default function ChangePassword() {
                 placeholder="Min 6 characters"
               />
               <button type="button" className="pwd-toggle" aria-label="Toggle password visibility" onClick={() => setShow((s) => ({ ...s, next: !s.next }))}>
-                {show.next ? EYE_OFF : EYE_ON}
+                {show.next ? EYE_ON : EYE_OFF}
               </button>
             </div>
           </label>
@@ -102,7 +102,7 @@ export default function ChangePassword() {
                 placeholder="Repeat your new password"
               />
               <button type="button" className="pwd-toggle" aria-label="Toggle password visibility" onClick={() => setShow((s) => ({ ...s, confirm: !s.confirm }))}>
-                {show.confirm ? EYE_OFF : EYE_ON}
+                {show.confirm ? EYE_ON : EYE_OFF}
               </button>
             </div>
           </label>

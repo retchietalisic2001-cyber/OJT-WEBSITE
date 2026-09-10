@@ -54,11 +54,13 @@ export default function ProfilePage() {
     schoolId: p.school_id || '',
     schoolName: '',
     courseMode: p.course && !COURSES.includes(p.course) ? 'other' : 'pick',
-    companyName: p.company_name || '',
-    industry: p.industry || '',
-    description: p.description || '',
-    address: user?.role === 'company' ? (p.address || '') : (user?.address || ''),
-    position: p.position || ''
+      companyName: p.company_name || '',
+      industry: p.industry || '',
+      description: p.description || '',
+      address: user?.role === 'company' ? (p.address || '') : (user?.address || ''),
+      lat: p.lat != null ? Number(p.lat) : null,
+      lng: p.lng != null ? Number(p.lng) : null,
+      position: p.position || ''
   })
 
   useEffect(() => {
@@ -86,6 +88,8 @@ export default function ProfilePage() {
       industry: u.industry || '',
       description: u.description || '',
       address: role === 'company' ? (u.address || '') : (user.address || ''),
+      lat: u.lat != null ? Number(u.lat) : null,
+      lng: u.lng != null ? Number(u.lng) : null,
       position: u.position || ''
     })
     loadedRef.current = true
