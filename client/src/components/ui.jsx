@@ -7,6 +7,7 @@ export const STATUS_META = {
   under_review: { label: 'Under Review', color: '#2F80ED', bg: '#E7F0FD' },
   interview: { label: 'Interview', color: '#D97706', bg: '#FDF3E3' },
   accepted: { label: 'Accepted', color: '#2FA86B', bg: '#E3F6EC' },
+  completed: { label: 'Completed', color: '#0EA5A4', bg: '#E0F7F6' },
   rejected: { label: 'Rejected', color: '#E5484D', bg: '#FDEBEC' },
   withdrawn: { label: 'Withdrawn', color: '#8A8FA3', bg: '#EFF0F4' }
 }
@@ -44,7 +45,7 @@ export function emptyState(title, hint, action) {
   )
 }
 
-const ORDER = ['submitted', 'under_review', 'interview', 'accepted']
+const ORDER = ['submitted', 'under_review', 'interview', 'accepted', 'completed']
 const TERMINAL = ['rejected', 'withdrawn']
 
 export function StatusStepper({ history }) {
@@ -89,6 +90,12 @@ export function Timeline({ history }) {
               <strong>{STATUS_META[h.status]?.label || h.status}</strong>
               <span className="muted">{fmtDate(h.created_at)}</span>
             </div>
+            {h.status === 'interview' && h.interview_date && (
+              <p className="interview-schedule">
+                🗓 <b>{fmtDate(h.interview_date)}</b>{h.interview_time ? ` at ${h.interview_time}` : ''}
+                {h.interview_link ? <span> · <a href={h.interview_link} target="_blank" rel="noreferrer">Join / details ↗</a></span> : null}
+              </p>
+            )}
             {h.note && <p>{h.note}</p>}
           </div>
         </div>

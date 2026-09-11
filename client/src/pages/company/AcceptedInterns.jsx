@@ -1,20 +1,48 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { api, fmtDate } from '../../api.js'
 import { Spinner, StatusBadge, emptyState } from '../../components/ui.jsx'
+import { toast } from '../../toast.jsx'
 
 export default function AcceptedInterns() {
   const { token } = useAuth()
+  const confirm = useConfirm()
   const [apps, setApps] = useState(null)
+  const [busyId, setBusyId] = useState(null)
+
+  const load = () => {
+    api('/applications/company', { token }).then(setApps).catch(() => setApps([]))
+  }
 
   useEffect(() => {
-    api('/applications/company', { token }).then(setApps).catch(() => setApps([]))
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
   if (!apps) return <Spinner />
 
   const accepted = apps.filter((a) => a.status === 'accepted')
+
+  const removeIntern = async (a) => {
+    const ok = await confirm({
+      title: 'Remove this intern?',
+      message: `Mark ${a.applicant_name}'s OJT at "${a.posting_title}" as completed? This will remove them from Accepted Interns and update their progress.`,
+      confirmLabel: 'Mark as completed'
+    })
+    if (!ok) return
+    setBusyId(a.id)
+    try {
+      await api(`/applications/${a.id}/complete`, { method: 'POST', token })
+      toast.success(`${a.applicant_name}'s OJT marked as completed`)
+      load()
+    } catch (e) {
+      toast.error(e.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
 
   return (
     <div className="page">
@@ -73,6 +101,9 @@ export default function AcceptedInterns() {
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <Link className="btn btn-ghost btn-sm" to={`/company/applications/${a.id}`}>Open →</Link>
+                    <button className="btn btn-ghost btn-sm danger" disabled={busyId === a.id} onClick={() => removeIntern(a)}>
+                      {busyId === a.id ? 'Removing…' : 'Remove'}
+                    </button>
                   </td>
                 </tr>
               ))}

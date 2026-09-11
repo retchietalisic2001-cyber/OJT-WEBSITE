@@ -1,9 +1,11 @@
 import { NavLink, Outlet, Link, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth, roleHome } from '../store.jsx'
 import { useConfirm } from '../confirm.jsx'
-import { closeSocket } from '../socket.js'
-import { api } from '../api.js'
+import { getSocket, closeSocket } from '../socket.js'
+import { api, fmtDateTime } from '../api.js'
+
+const NOTIF_ICON = { chat: '💬', application: '📄', school: '🏫', general: '🔔' }
 
 const MSG_PATH = {
   applicant: '/app/messages',
@@ -70,27 +72,71 @@ export default function Layout() {
   const navigate = useNavigate()
   const confirm = useConfirm()
   const [unread, setUnread] = useState(0)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [notifications, setNotifications] = useState(null)
+  const notifRef = useRef(null)
 
   useEffect(() => {
     if (!user || !token || user.role === 'admin') return
     let alive = true
     const load = () =>
-      api('/chat/unread', { token })
+      api('/notifications/unread', { token })
         .then((r) => alive && setUnread(r.total || 0))
         .catch(() => {})
     load()
-    const t = setInterval(load, 15000)
+    const t = setInterval(load, 20000)
     const onFocus = () => load()
     window.addEventListener('focus', onFocus)
+    const s = getSocket(token)
+    const onNew = (n) => {
+      if (!alive) return
+      setUnread((u) => u + 1)
+      if (notifOpen) refreshNotifications()
+    }
+    s.on('notifications:new', onNew)
     return () => {
       alive = false
       clearInterval(t)
       window.removeEventListener('focus', onFocus)
+      s.off('notifications:new', onNew)
     }
   }, [user, token])
 
+  const refreshNotifications = () => {
+    api('/notifications', { token })
+      .then((r) => {
+        setNotifications(r.notifications || [])
+        setUnread(r.unread || 0)
+      })
+      .catch(() => setNotifications([]))
+  }
+
+  useEffect(() => {
+    if (!notifOpen) return
+    refreshNotifications()
+    api('/notifications/read-all', { method: 'POST', token }).catch(() => {})
+  }, [notifOpen, token])
+
+  useEffect(() => {
+    if (!notifOpen) return
+    const onClick = (e) => {
+      if (notifRef.current && !notifRef.current.contains(e.target)) setNotifOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [notifOpen])
+
   if (!user) return null
   const nav = NAV[user.role] || []
+
+  const openNotification = (n) => {
+    setNotifOpen(false)
+    if (!n.is_read) {
+      setNotifications((list) => (list ? list.map((x) => (x.id === n.id ? { ...x, is_read: 1 } : x)) : list))
+      api(`/notifications/${n.id}/read`, { method: 'POST', token }).catch(() => {})
+    }
+    if (n.link) navigate(n.link)
+  }
 
   const goToMessages = () => {
     const path = MSG_PATH[user.role]
@@ -160,12 +206,41 @@ export default function Layout() {
             </div>
           </Link>
           {user.role !== 'admin' && (
-            <button className="icon-btn bell-btn" onClick={goToMessages} title="Messages" aria-label="Messages">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />
-              </svg>
-              {unread > 0 && <span className="bell-badge">{unread > 99 ? '99+' : unread}</span>}
-            </button>
+            <div className="notif-wrap" ref={notifRef}>
+              <button className="icon-btn bell-btn" onClick={() => setNotifOpen((o) => !o)} title="Notifications" aria-label="Notifications">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />
+                </svg>
+                {unread > 0 && <span className="bell-badge">{unread > 99 ? '99+' : unread}</span>}
+              </button>
+              {notifOpen && (
+                <div className="notif-panel glass">
+                  <div className="notif-head">
+                    <strong>Notifications</strong>
+                    <button className="link-btn" onClick={goToMessages}>Open messages</button>
+                  </div>
+                  <div className="notif-list">
+                    {notifications === null ? (
+                      <div className="notif-empty">Loading…</div>
+                    ) : notifications.length === 0 ? (
+                      <div className="notif-empty">You're all caught up ✨</div>
+                    ) : (
+                      notifications.map((n) => (
+                        <button key={n.id} className={'notif-item' + (n.is_read ? '' : ' unread')} onClick={() => openNotification(n)}>
+                          <span className="notif-emoji">{NOTIF_ICON[n.type] || NOTIF_ICON.general}</span>
+                          <div className="notif-meta">
+                            <strong className="notif-title">{n.title}</strong>
+                            <span className="notif-preview">{n.body}</span>
+                            <span className="muted small notif-time">{fmtDateTime(n.created_at)}</span>
+                          </div>
+                          {!n.is_read ? <span className="notif-dot" /> : null}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           <button className="link-btn logout-btn" onClick={handleLogout}>
             <Icon name="logout" /> Sign out

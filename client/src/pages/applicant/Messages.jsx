@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
 import { api, fmtDateTime } from '../../api.js'
 import ChatBox from '../../components/ChatBox.jsx'
@@ -7,6 +7,7 @@ import { Spinner, emptyState } from '../../components/ui.jsx'
 
 export default function Messages() {
   const { token, user } = useAuth()
+  const [params] = useSearchParams()
   const [threads, setThreads] = useState(null)
   const [active, setActive] = useState(null)
 
@@ -16,7 +17,12 @@ export default function Messages() {
         setThreads(r.threads || [])
         setActive((cur) => {
           if (cur) return cur
-          const t = (r.threads || [])[0]
+          const list = r.threads || []
+          const wantApp = Number(params.get('application'))
+          const wantSchool = params.get('school')
+          const t = list.find((x) => x.type === 'application' && Number(x.applicationId) === wantApp)
+            || list.find((x) => x.type === 'school') && wantSchool
+            || list[0]
           return t ? { key: t.key, type: t.type, applicationId: t.applicationId, studentId: t.type === 'school' ? user.id : undefined, name: t.name } : null
         })
       })

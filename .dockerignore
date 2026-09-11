@@ -5,6 +5,7 @@ data
 server/uploads
 .git
 .gitignore
+.env
 dev.log
 *.log
 Dockerfile

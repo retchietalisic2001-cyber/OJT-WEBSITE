@@ -3,6 +3,7 @@ import { all, get, run, transaction, nowTs, APPLICATION_STATUSES, STATUS_META } 
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { attachResumeToApplication } from './resume.js'
 import { generateCover } from '../services/recommender.js'
+import { createNotification } from '../services/notifications.js'
 
 const router = Router()
 
@@ -66,6 +67,14 @@ router.post('/', requireRole('applicant'), async (req, res, next) => {
        WHERE a.id = ?`,
       id
     )
+    await createNotification({
+      userId: posting.company_id,
+      type: 'application',
+      title: 'New application received',
+      body: `${req.user.name} applied for “${row.posting_title}”`,
+      link: `/company/applications/${id}`,
+      io: req.app.get('io')
+    })
     res.status(201).json({ ...serializeApplication(row), resume_attached: resumeAttached, resume_missing: resumeMissing })
   } catch (err) {
     next(err)
@@ -74,7 +83,7 @@ router.post('/', requireRole('applicant'), async (req, res, next) => {
 
 router.get('/my', requireRole('applicant'), async (req, res) => {
   const rows = await all(
-    `SELECT a.*, p.title AS posting_title, p.city, p.address, p.course_tags, c.company_name,
+    `SELECT a.*, p.title AS posting_title, p.city, p.address, p.course_tags, c.company_name, c.logo AS company_logo,
             (SELECT COUNT(*) FROM messages m
              WHERE m.application_id = a.id AND m.sender_id != ? AND m.is_read = 0) AS unread_count
      FROM applications a
@@ -126,7 +135,7 @@ async function loadFullApplication(id) {
             p.requirements AS posting_requirements, p.course_tags, p.city, p.address, p.slots,
             u.name AS applicant_name, u.email AS applicant_email,
             ap.course, ap.year_level, ap.phone, ap.school_id, s.name AS school_name,
-            c.company_name, c.industry, c.description AS company_description, c.address AS company_address,
+            c.company_name, c.industry, c.logo AS company_logo, c.description AS company_description, c.address AS company_address,
             c.lat AS company_lat, c.lng AS company_lng,
             (SELECT m.file_path FROM messages m WHERE m.application_id = a.id AND m.file_mime = 'application/pdf' AND m.file_name LIKE 'Resume_%' ORDER BY m.id DESC LIMIT 1) AS resume_path,
             (SELECT m.file_name FROM messages m WHERE m.application_id = a.id AND m.file_mime = 'application/pdf' AND m.file_name LIKE 'Resume_%' ORDER BY m.id DESC LIMIT 1) AS resume_name,
@@ -170,13 +179,48 @@ router.put('/:id/status', requireRole('company'), async (req, res) => {
   const note = String(req.body?.note || '').trim()
   if (status === 'rejected' && !note) return res.status(400).json({ error: 'Please provide a reason when declining an application' })
 
+  const PROGRESS = { submitted: 0, under_review: 1, interview: 2, accepted: 3 }
+  const TERMINAL = ['accepted', 'completed', 'rejected', 'withdrawn']
+  if (TERMINAL.includes(row.status)) return res.status(400).json({ error: 'This application is already finalized' })
+  if (row.status === status) return res.status(400).json({ error: `This application is already marked ${STATUS_META[status]?.label || status}` })
+  if (PROGRESS[row.status] !== undefined && PROGRESS[status] !== undefined && PROGRESS[status] <= PROGRESS[row.status]) {
+    return res.status(400).json({ error: `Status cannot go backwards — it is already ${STATUS_META[row.status]?.label || row.status}` })
+  }
+
+  const interviewDate = String(req.body?.interview_date || '').trim().slice(0, 10)
+  const interviewTime = String(req.body?.interview_time || '').trim().slice(0, 5)
+  const interviewLink = String(req.body?.interview_link || '').trim()
+  if (status === 'interview' && (!interviewDate || !interviewTime)) {
+    return res.status(400).json({ error: 'Pick a date and time for the interview' })
+  }
+
   await transaction(async (tx) => {
     await tx.run('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?', status, nowTs(), row.id)
-    await tx.run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', row.id, status, note)
+    if (status === 'interview') {
+      await tx.run(
+        `INSERT INTO status_history (application_id, status, note, interview_date, interview_time, interview_link)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        row.id, status, note, interviewDate, interviewTime, interviewLink
+      )
+    } else {
+      await tx.run('INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)', row.id, status, note)
+    }
   })
 
   const updated = await loadFullApplication(row.id)
   updated.status_history = await all('SELECT * FROM status_history WHERE application_id = ? ORDER BY id ASC', row.id)
+
+  const meta = STATUS_META[status] || { label: status }
+  const schedule = status === 'interview' ? ` Scheduled for ${interviewDate} at ${interviewTime}.` : ''
+  await createNotification({
+    userId: row.applicant_id,
+    type: status === 'interview' ? 'interview' : 'application',
+    title: status === 'interview' ? 'Interview invitation' : `Application ${meta.label.toLowerCase()}`,
+    body: `Your application for “${row.posting_title}” at ${row.company_name} is now ${meta.label.toLowerCase()}${note ? ` — ${note}` : ''}${schedule}`,
+    link: `/app/applications/${row.id}`,
+    io: req.app.get('io')
+  })
+
   res.json(serializeApplication(updated))
 })
 
@@ -194,6 +238,80 @@ router.post('/:id/withdraw', requireRole('applicant'), async (req, res) => {
 
   const updated = await loadFullApplication(row.id)
   updated.status_history = await all('SELECT * FROM status_history WHERE application_id = ? ORDER BY id ASC', row.id)
+
+  await createNotification({
+    userId: row.company_id,
+    type: 'application',
+    title: 'Application withdrawn',
+    body: `${req.user.name} withdrew their application for “${row.posting_title}”`,
+    link: `/company/applications/${row.id}`,
+    io: req.app.get('io')
+  })
+
+  res.json(serializeApplication(updated))
+})
+
+router.post('/:id/abandon', requireRole('applicant'), async (req, res) => {
+  const row = await loadFullApplication(req.params.id)
+  if (!row) return res.status(404).json({ error: 'Application not found' })
+  if (row.applicant_id !== req.user.id) return res.status(403).json({ error: 'Not your application' })
+  if (row.status !== 'accepted') return res.status(400).json({ error: 'Only accepted offers can be abandoned' })
+  const reason = String(req.body?.reason || '').trim()
+  if (!reason) return res.status(400).json({ error: 'Please provide a reason for abandoning the offer' })
+
+  await transaction(async (tx) => {
+    await tx.run('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?', 'withdrawn', nowTs(), row.id)
+    await tx.run(
+      'INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)',
+      row.id,
+      'withdrawn',
+      `Offer abandoned by applicant — ${reason}`
+    )
+  })
+
+  const updated = await loadFullApplication(row.id)
+  updated.status_history = await all('SELECT * FROM status_history WHERE application_id = ? ORDER BY id ASC', row.id)
+
+  await createNotification({
+    userId: row.company_id,
+    type: 'application',
+    title: 'Offer abandoned',
+    body: `${req.user.name} abandoned the accepted offer for “${row.posting_title}” — ${reason}`,
+    link: `/company/applications/${row.id}`,
+    io: req.app.get('io')
+  })
+
+  res.json(serializeApplication(updated))
+})
+
+router.post('/:id/complete', requireRole('company'), async (req, res) => {
+  const row = await loadFullApplication(req.params.id)
+  if (!row) return res.status(404).json({ error: 'Application not found' })
+  if (!canAccess(req, row)) return res.status(403).json({ error: 'Not your application' })
+  if (row.status !== 'accepted') return res.status(400).json({ error: 'Only accepted interns can be removed' })
+
+  await transaction(async (tx) => {
+    await tx.run('UPDATE applications SET status = ?, updated_at = ? WHERE id = ?', 'completed', nowTs(), row.id)
+    await tx.run(
+      'INSERT INTO status_history (application_id, status, note) VALUES (?, ?, ?)',
+      row.id,
+      'completed',
+      'Intern completed their OJT at the company'
+    )
+  })
+
+  const updated = await loadFullApplication(row.id)
+  updated.status_history = await all('SELECT * FROM status_history WHERE application_id = ? ORDER BY id ASC', row.id)
+
+  await createNotification({
+    userId: row.applicant_id,
+    type: 'application',
+    title: 'OJT completed 🎉',
+    body: `You have completed your OJT at ${row.company_name} — the company marked your internship as finished.`,
+    link: `/app/applications/${row.id}`,
+    io: req.app.get('io')
+  })
+
   res.json(serializeApplication(updated))
 })
 

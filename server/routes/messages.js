@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { all, get, run, nowTs } from '../db.js'
 import { requireAuth } from '../middleware/auth.js'
 import { upload, mimeCategory } from '../middleware/upload.js'
+import { createNotification } from '../services/notifications.js'
 
 const router = Router()
 
@@ -36,6 +37,21 @@ function emitNewMessage(req, message) {
   if (io) io.to(`app-${req.appCtx.id}`).emit('message:new', serializeMessage(message))
 }
 
+function notifyChatRecipient(req, message) {
+  const isApplicant = req.user.role === 'applicant'
+  const recipientId = isApplicant ? req.appCtx.company_id : req.appCtx.applicant_id
+  const io = req.app.get('io')
+  const preview = (message.content || message.file_name || 'Message').slice(0, 120)
+  createNotification({
+    userId: recipientId,
+    type: 'chat',
+    title: isApplicant ? 'New message from company' : 'New message from applicant',
+    body: `${req.user.name}: ${preview}`,
+    link: isApplicant ? `/app/messages?application=${req.appCtx.id}` : `/company/applications/${req.appCtx.id}`,
+    io
+  })
+}
+
 router.get('/:applicationId', async (req, res) => {
   const messages = await all(
     'SELECT * FROM messages WHERE application_id = ? ORDER BY id ASC',
@@ -61,6 +77,7 @@ router.post('/:applicationId', async (req, res) => {
   )
   const message = await get('SELECT * FROM messages WHERE id = ?', id)
   emitNewMessage(req, message)
+  notifyChatRecipient(req, message)
   res.status(201).json(serializeMessage(message))
 })
 
@@ -85,6 +102,7 @@ router.post(
     )
     const message = await get('SELECT * FROM messages WHERE id = ?', id)
     emitNewMessage(req, message)
+    notifyChatRecipient(req, message)
     res.status(201).json(serializeMessage(message))
   },
   (err, req, res, next) => {

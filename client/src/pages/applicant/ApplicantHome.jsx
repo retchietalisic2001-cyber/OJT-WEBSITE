@@ -132,6 +132,33 @@ export default function ApplicantHome() {
         </div>
       )}
 
+      {placement?.accepted?.length > 0 && (
+        <div className="card card-pad accepted-banner">
+          <div className="section-head">
+            <h3>✅ Your accepted companies</h3>
+            <span className="muted small">Companies that accepted your application</span>
+          </div>
+          <div className="accepted-list">
+            {placement.accepted.map((c) => (
+              <div className="placement-inline accepted-row" key={c.application_id}>
+                <div className="school-logo">
+                  {c.company_logo ? <img src={c.company_logo} alt={c.company_name} /> : '🏢'}
+                </div>
+                <div className="grow">
+                  <h3>{c.company_name}</h3>
+                  <p className="muted">
+                    Accepted you for <strong>“{c.posting_title}”</strong>
+                    {c.city ? ` — ${c.city}` : ''}
+                    {c.industry ? <span className="muted small"> · {c.industry}</span> : ''}
+                  </p>
+                </div>
+                <Link className="btn btn-primary btn-sm" to={`/app/applications/${c.application_id}`}>View application →</Link>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {invites.length > 0 && (
         <section className="invite-section">
           {invites.map((inv) => (
@@ -188,7 +215,7 @@ export default function ApplicantHome() {
               {recs.map((r) => (
                 <div key={r.id} className="job-card static">
                   <div className="job-card-top">
-                    <div className="job-logo">{r.company_name?.charAt(0).toUpperCase()}</div>
+                    <div className="job-logo">{r.company_logo ? <img src={r.company_logo} alt={r.company_name} /> : r.company_name?.charAt(0).toUpperCase()}</div>
                     <div className="job-title-wrap">
                       <h3>{r.title}</h3>
                       <span className="muted">{r.company_name}{r.city ? ` — ${r.city}` : ''}</span>

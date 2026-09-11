@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
 import { useConfirm } from '../../confirm.jsx'
 import { api, fmtDate } from '../../api.js'
-import { Spinner, StatusBadge, StatusStepper, Timeline } from '../../components/ui.jsx'
+import { Spinner, StatusBadge, StatusStepper, Timeline, Modal } from '../../components/ui.jsx'
 import ChatBox from '../../components/ChatBox.jsx'
 import { toast } from '../../toast.jsx'
 
@@ -13,6 +13,9 @@ export default function ApplicationDetail() {
   const confirm = useConfirm()
   const [app, setApp] = useState(null)
   const [attaching, setAttaching] = useState(false)
+  const [abandonOpen, setAbandonOpen] = useState(false)
+  const [abandonReason, setAbandonReason] = useState('')
+  const [abandonBusy, setAbandonBusy] = useState(false)
 
   useEffect(() => {
     api(`/applications/${id}`, { token }).then(setApp).catch((e) => toast.error(e.message))
@@ -53,6 +56,30 @@ export default function ApplicationDetail() {
     }
   }
 
+  const abandon = async () => {
+    const reason = abandonReason.trim()
+    if (!reason) return toast.error('Please tell us why you are abandoning this offer')
+    const ok = await confirm({
+      title: 'Abandon this offer?',
+      message: `You will give up the accepted offer for "${app.posting_title}" at ${app.company_name}.\n\nReason: "${reason}"`,
+      confirmLabel: 'Abandon offer',
+      danger: true
+    })
+    if (!ok) return
+    setAbandonBusy(true)
+    try {
+      const updated = await api(`/applications/${id}/abandon`, { method: 'POST', token, body: { reason } })
+      setApp(updated)
+      setAbandonOpen(false)
+      setAbandonReason('')
+      toast.success('Offer abandoned — the company has been notified')
+    } catch (e) {
+      toast.error(e.message)
+    } finally {
+      setAbandonBusy(false)
+    }
+  }
+
   if (!app) return <Spinner />
 
   return (
@@ -60,14 +87,22 @@ export default function ApplicationDetail() {
       <Link className="back-link" to="/app/applications">← My applications</Link>
 
       <header className="page-head">
-        <div>
-          <h1>{app.posting_title}</h1>
-          <p className="muted">{app.company_name} · {app.city}{app.address ? ` · ${app.address}` : ''}</p>
+        <div className="app-head-info">
+          <div className="job-logo" style={{ width: 44, height: 44 }}>
+            {app.company_logo ? <img src={app.company_logo} alt={app.company_name} /> : app.company_name?.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <h1>{app.posting_title}</h1>
+            <p className="muted">{app.company_name} · {app.city}{app.address ? ` · ${app.address}` : ''}</p>
+          </div>
         </div>
         <div className="head-actions">
           <StatusBadge status={app.status} />
-          {!['accepted', 'rejected', 'withdrawn'].includes(app.status) && (
+          {!['accepted', 'completed', 'rejected', 'withdrawn'].includes(app.status) && (
             <button className="btn btn-ghost btn-sm danger" onClick={withdraw}>Withdraw</button>
+          )}
+          {app.status === 'accepted' && (
+            <button className="btn btn-ghost btn-sm danger" onClick={() => setAbandonOpen(true)}>Abandon offer</button>
           )}
         </div>
       </header>
@@ -108,6 +143,29 @@ export default function ApplicationDetail() {
           </div>
         </div>
       </div>
+
+      <Modal open={abandonOpen} onClose={() => setAbandonOpen(false)} title="Abandon the accepted offer" width="460px">
+        <p className="muted small">
+          You are about to give up the accepted offer for <b>“{app.posting_title}”</b> at <b>{app.company_name}</b>. This cannot be undone,
+          and the company will be notified. Please tell them why.
+        </p>
+        <label className="field">
+          <span className="field-label">Reason for abandoning (required)</span>
+          <textarea
+            className="input textarea"
+            rows={3}
+            value={abandonReason}
+            onChange={(e) => setAbandonReason(e.target.value)}
+            placeholder="e.g. I already accepted another OJT offer…"
+          />
+        </label>
+        <div className="form-actions">
+          <button className="btn btn-ghost" onClick={() => setAbandonOpen(false)}>Cancel</button>
+          <button className="btn btn-danger" disabled={abandonBusy} onClick={abandon}>
+            {abandonBusy ? 'Abandoning…' : 'Abandon offer'}
+          </button>
+        </div>
+      </Modal>
     </div>
   )
 }

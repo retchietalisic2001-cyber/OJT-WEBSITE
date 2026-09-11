@@ -46,7 +46,7 @@ function reasonFor(parts, posting, profile, dist, openSlots, skills, matchedSkil
 
 export async function recommendPostings(profile, limit = 6) {
   const postings = await all(`
-    SELECT p.*, c.company_name, c.industry, c.lat AS company_lat, c.lng AS company_lng,
+    SELECT p.*, c.company_name, c.industry, c.logo AS company_logo, c.lat AS company_lat, c.lng AS company_lng,
            (SELECT COUNT(*) FROM applications a WHERE a.posting_id = p.id AND a.status = 'accepted') AS accepted_count
     FROM postings p
     JOIN company_profiles c ON c.user_id = p.company_id

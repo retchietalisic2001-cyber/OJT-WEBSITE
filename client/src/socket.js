@@ -4,7 +4,11 @@ let socket = null
 
 export function getSocket(token) {
   if (!socket) {
-    socket = io('/', { auth: { token }, transports: ['websocket', 'polling'] })
+    // Set VITE_SOCKET_URL to the backend URL when the frontend is hosted
+    // separately from the backend (e.g. InfinityFree). Defaults to same-origin
+    // ('/'), which works in development and when the server serves the app.
+    const url = import.meta.env.VITE_SOCKET_URL || '/'
+    socket = io(url, { auth: { token }, transports: ['websocket', 'polling'] })
   }
   return socket
 }

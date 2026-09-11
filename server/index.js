@@ -17,6 +17,7 @@ import postingsRoutes from './routes/postings.js'
 import applicationsRoutes from './routes/applications.js'
 import messagesRoutes from './routes/messages.js'
 import chatRoutes from './routes/chat.js'
+import notificationsRoutes from './routes/notifications.js'
 import resumeRoutes from './routes/resume.js'
 import recommendationsRoutes from './routes/recommendations.js'
 import supportRoutes from './routes/support.js'
@@ -43,6 +44,7 @@ app.use('/api/postings', postingsRoutes)
 app.use('/api/applications', applicationsRoutes)
 app.use('/api/messages', messagesRoutes)
 app.use('/api/chat', chatRoutes)
+app.use('/api/notifications', notificationsRoutes)
 app.use('/api/resume', resumeRoutes)
 app.use('/api/recommendations', recommendationsRoutes)
 app.use('/api/support', supportRoutes)
@@ -77,6 +79,7 @@ io.use(async (socket, next) => {
 })
 
 io.on('connection', (socket) => {
+  socket.join(`user-${socket.user.id}`)
   socket.on('presence', ({ role }) => {
     if (role === 'admin' && socket.user?.role === 'admin') {
       adminSockets.add(socket.id)

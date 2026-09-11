@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { all, get, run } from '../db.js'
 import { requireAuth } from '../middleware/auth.js'
 import { upload, mimeCategory } from '../middleware/upload.js'
+import { createNotification } from '../services/notifications.js'
 
 const router = Router()
 
@@ -22,6 +23,33 @@ function schoolRoom(schoolId, studentId) {
 
 function emitToSchool(io, schoolId, studentId, message) {
   if (io) io.to(schoolRoom(schoolId, studentId)).emit('message:new', serializeMessage(message))
+}
+
+async function notifySchoolChat(req, student, message) {
+  const io = req.app.get('io')
+  const preview = (message.content || message.file_name || 'Message').slice(0, 120)
+  if (req.user.role === 'school') {
+    await createNotification({
+      userId: student.id,
+      type: 'school',
+      title: 'New message from your school',
+      body: `${req.user.name}: ${preview}`,
+      link: '/app/messages?school=1',
+      io
+    })
+  } else {
+    const coords = await all('SELECT user_id FROM school_coordinators WHERE school_id = ?', student.school_id)
+    for (const c of coords) {
+      await createNotification({
+        userId: c.user_id,
+        type: 'school',
+        title: 'New message from student',
+        body: `${student.name}: ${preview}`,
+        link: `/school/messages?student=${student.id}`,
+        io
+      })
+    }
+  }
 }
 
 async function studentWithSchool(studentId) {
@@ -127,6 +155,112 @@ router.get('/unread', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+router.get('/notifications', async (req, res, next) => {
+  try {
+    let notifications = []
+    if (req.user.role === 'school') {
+      const coord = await coordinatorSchool(req.user.id)
+      if (coord) {
+        const rows = await all(
+          `SELECT m.*, u.name AS title, u.email, ap.student_id AS student_id_number
+           FROM school_messages m
+           JOIN users u ON u.id = m.student_id
+           LEFT JOIN applicant_profiles ap ON ap.user_id = m.student_id
+           WHERE m.school_id = ? AND m.sender_id != ?
+           ORDER BY m.id DESC LIMIT 20`,
+          coord,
+          req.user.id
+        )
+        notifications = rows.map((m) => ({
+          id: `school-${m.id}`,
+          kind: 'school',
+          title: m.title,
+          subtitle: m.student_id_number ? `Student ID ${m.student_id_number}` : m.email,
+          content: m.content,
+          file_name: m.file_name,
+          created_at: m.created_at,
+          unread: m.is_read ? 0 : 1,
+          studentId: m.student_id,
+          logo: null
+        }))
+      }
+    } else if (req.user.role === 'company') {
+      const rows = await all(
+        `SELECT m.*, p.title AS posting_title, u.name AS applicant_name, a.id AS application_id
+         FROM messages m
+         JOIN applications a ON a.id = m.application_id
+         JOIN postings p ON p.id = a.posting_id
+         JOIN users u ON u.id = a.applicant_id
+         WHERE p.company_id = ? AND m.sender_id != ?
+         ORDER BY m.id DESC LIMIT 20`,
+        req.user.id,
+        req.user.id
+      )
+      notifications = rows.map((m) => ({
+        id: `application-${m.id}`,
+        kind: 'application',
+        title: m.applicant_name,
+        subtitle: m.posting_title,
+        content: m.content,
+        file_name: m.file_name,
+        created_at: m.created_at,
+        unread: m.is_read ? 0 : 1,
+        applicationId: m.application_id,
+        logo: null
+      }))
+    } else {
+      const appRows = await all(
+        `SELECT m.*, p.title AS posting_title, c.company_name, c.logo AS company_logo, a.id AS application_id
+         FROM messages m
+         JOIN applications a ON a.id = m.application_id
+         JOIN postings p ON p.id = a.posting_id
+         JOIN company_profiles c ON c.user_id = p.company_id
+         WHERE a.applicant_id = ? AND m.sender_id != ?
+         ORDER BY m.id DESC LIMIT 20`,
+        req.user.id,
+        req.user.id
+      )
+      const schRows = await all(
+        `SELECT m.*, s.name AS school_name, s.logo AS school_logo
+         FROM school_messages m
+         JOIN schools s ON s.id = m.school_id
+         WHERE m.student_id = ? AND m.sender_id != ?
+         ORDER BY m.id DESC LIMIT 20`,
+        req.user.id,
+        req.user.id
+      )
+      const merged = [
+        ...appRows.map((m) => ({
+          id: `application-${m.id}`,
+          kind: 'application',
+          title: m.company_name,
+          subtitle: m.posting_title,
+          content: m.content,
+          file_name: m.file_name,
+          created_at: m.created_at,
+          unread: m.is_read ? 0 : 1,
+          applicationId: m.application_id,
+          logo: m.company_logo
+        })),
+        ...schRows.map((m) => ({
+          id: `school-${m.id}`,
+          kind: 'school',
+          title: m.school_name,
+          subtitle: 'School chat',
+          content: m.content,
+          file_name: m.file_name,
+          created_at: m.created_at,
+          unread: m.is_read ? 0 : 1,
+          studentId: null,
+          logo: m.school_logo
+        }))
+      ]
+      notifications = merged.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 20)
+    }
+    res.json({ notifications })
+  } catch (err) { next(err) }
+})
+
 router.get('/school/:studentId', async (req, res, next) => {
   try {
     const student = await studentWithSchool(req.params.studentId)
@@ -172,6 +306,7 @@ router.post('/school/:studentId', async (req, res, next) => {
     )
     const message = await get('SELECT * FROM school_messages WHERE id = ?', id)
     emitToSchool(req.app.get('io'), student.school_id, student.id, message)
+    await notifySchoolChat(req, student, message)
     res.status(201).json(serializeMessage(message))
   } catch (err) { next(err) }
 })
@@ -203,6 +338,7 @@ router.post(
       )
       const message = await get('SELECT * FROM school_messages WHERE id = ?', id)
       emitToSchool(req.app.get('io'), student.school_id, student.id, message)
+      await notifySchoolChat(req, student, message)
       res.status(201).json(serializeMessage(message))
     } catch (err) {
       if (err?.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File must be 10 MB or smaller' })

@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useAuth } from '../../store.jsx'
 import { useConfirm } from '../../confirm.jsx'
 import { api, fmtDate } from '../../api.js'
-import { Spinner, StatusBadge, StatusStepper, Timeline } from '../../components/ui.jsx'
+import { Spinner, StatusBadge, StatusStepper, Timeline, Modal } from '../../components/ui.jsx'
 import ChatBox from '../../components/ChatBox.jsx'
 import FileViewer from '../../components/FileViewer.jsx'
 import { toast } from '../../toast.jsx'
@@ -27,15 +27,31 @@ export default function CompanyApplicationDetail() {
   const { token } = useAuth()
   const confirm = useConfirm()
   const [app, setApp] = useState(null)
-  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [viewingResume, setViewingResume] = useState(false)
+  const [ivOpen, setIvOpen] = useState(false)
+  const [ivDate, setIvDate] = useState('')
+  const [ivTime, setIvTime] = useState('')
+  const [ivNote, setIvNote] = useState('')
+  const [ivLink, setIvLink] = useState('')
+
+  const today = new Date()
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
 
   useEffect(() => {
     api(`/applications/${id}`, { token }).then(setApp).catch((e) => toast.error(e.message))
   }, [id, token])
 
   if (!app) return <Spinner />
+
+  const STATUS_ORDER = { submitted: 0, under_review: 1, interview: 2, accepted: 3 }
+  const curIdx = STATUS_ORDER[app.status]
+  const locked = ['accepted', 'completed', 'rejected', 'withdrawn'].includes(app.status)
+  const isStageDone = (status) => {
+    if (locked) return true
+    const t = STATUS_ORDER[status]
+    return t !== undefined && curIdx !== undefined && t <= curIdx
+  }
 
   const setStatus = async (status, customNote = '') => {
     let declineReason = ''
@@ -60,11 +76,33 @@ export default function CompanyApplicationDetail() {
       const updated = await api(`/applications/${id}/status`, {
         method: 'PUT',
         token,
-        body: { status, note: declineReason || customNote || note }
+        body: { status, note: declineReason || customNote }
       })
       setApp(updated)
-      setNote('')
       toast.success('Status updated — applicant will see it immediately')
+    } catch (e) {
+      toast.error(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitInterview = async () => {
+    if (!ivDate || !ivTime) return toast.error('Pick a date and time for the interview')
+    setBusy(true)
+    try {
+      const updated = await api(`/applications/${id}/status`, {
+        method: 'PUT',
+        token,
+        body: { status: 'interview', note: ivNote, interview_date: ivDate, interview_time: ivTime, interview_link: ivLink }
+      })
+      setApp(updated)
+      setIvOpen(false)
+      setIvDate('')
+      setIvTime('')
+      setIvNote('')
+      setIvLink('')
+      toast.success('Interview invitation sent — the applicant will see the schedule in their progress')
     } catch (e) {
       toast.error(e.message)
     } finally {
@@ -91,21 +129,21 @@ export default function CompanyApplicationDetail() {
         <div className="detail-main">
           <div className="card card-pad">
             <h3>Update status</h3>
-            <p className="muted small">Each update adds a step to the applicant's timeline.</p>
+            <p className="muted small">Each update adds a step to the applicant's timeline. Statuses move forward only — once a stage is reached it can't be undone.</p>
             <div className="quick-status">
               {QUICK.map((q) => (
-                <button key={q.status} className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setStatus(q.status)}>
+                <button
+                  key={q.status}
+                  className="btn btn-ghost btn-sm"
+                  disabled={busy || isStageDone(q.status)}
+                  title={isStageDone(q.status) ? 'This stage is already past — statuses move forward only' : q.label}
+                  onClick={() => (q.status === 'interview' ? setIvOpen(true) : setStatus(q.status))}
+                >
                   {q.label}
                 </button>
               ))}
             </div>
-            <label className="field mt">
-              <span className="field-label">Note for the applicant (optional)</span>
-              <textarea className="input textarea" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Please prepare for a virtual interview on Thursday…" />
-            </label>
-            <div className="form-actions">
-              <button className="btn btn-primary" disabled={busy} onClick={() => setStatus('under_review', '')}>Save note</button>
-            </div>
+            {locked && <p className="muted small mt">This application is finalized — no further status changes.</p>}
           </div>
 
           <div className="card card-pad">
@@ -169,6 +207,40 @@ export default function CompanyApplicationDetail() {
           onClose={() => setViewingResume(false)}
         />
       )}
+
+      <Modal open={ivOpen} onClose={() => setIvOpen(false)} title={`Interview invitation — ${app.applicant_name.split(' ')[0]}`} width="440px">
+        <p className="muted small">Pick the date and time, and the applicant will see it in their progress timeline.</p>
+        <div className="form-grid">
+          <label className="field">
+            <span className="field-label">Interview date</span>
+            <input type="date" className="input" min={todayStr} value={ivDate} onChange={(e) => setIvDate(e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">Interview time</span>
+            <input type="time" className="input" value={ivTime} onChange={(e) => setIvTime(e.target.value)} />
+          </label>
+        </div>
+        <label className="field">
+          <span className="field-label">Note for the applicant (optional)</span>
+          <textarea
+            className="input textarea"
+            rows={3}
+            value={ivNote}
+            onChange={(e) => setIvNote(e.target.value)}
+            placeholder="e.g. Please prepare for a 30-minute video call. Bring any documents you may need…"
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">Meeting link or location (optional)</span>
+          <input className="input" value={ivLink} onChange={(e) => setIvLink(e.target.value)} placeholder="https://meet.google.com/… or office address" />
+        </label>
+        <div className="form-actions">
+          <button className="btn btn-ghost" onClick={() => setIvOpen(false)}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={submitInterview}>
+            {busy ? 'Sending…' : 'Send interview invitation'}
+          </button>
+        </div>
+      </Modal>
     </div>
   )
 }

@@ -36,7 +36,7 @@ export default function MyApplications() {
           {apps.map((a) => (
             <Link key={a.id} to={`/app/applications/${a.id}`} className="card app-row">
               <div className="app-row-main">
-                <div className="job-logo">{a.company_name?.charAt(0).toUpperCase()}</div>
+                <div className="job-logo">{a.company_logo ? <img src={a.company_logo} alt={a.company_name} /> : a.company_name?.charAt(0).toUpperCase()}</div>
                 <div>
                   <h3>{a.posting_title}</h3>
                   <span className="muted">{a.company_name}{a.city ? ` — ${a.city}` : ''}</span>

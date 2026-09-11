@@ -1,4 +1,8 @@
-const API = '/api'
+// Base URL for API requests. Set VITE_API_URL when the frontend is hosted
+// somewhere other than the backend (e.g. InfinityFree static hosting) so calls
+// go to the Render backend instead of the same origin. Example:
+//   VITE_API_URL=https://ojt-connect.onrender.com
+const API = import.meta.env.VITE_API_URL || '/api'
 
 export async function api(path, { method = 'GET', body, token, form } = {}) {
   const headers = {}

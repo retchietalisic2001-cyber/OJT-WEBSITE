@@ -1,5 +1,38 @@
-# Render blueprint — deploys OJT Connect as a simple web service.
+# Render blueprint — deploys OJT Connect as a free web service.
 # Docs: https://render.com/docs/blueprint-spec
+#
+# WHY RENDER + INFINITYFREE MYSQL (not InfinityFree hosting alone):
+#   InfinityFree cannot run Node.js, and Render's free Postgres database
+#   deletes itself 30 days after creation. So the app runs on Render and its
+#   database lives in the free MySQL (MariaDB) you create on InfinityFree —
+#   that combination is persistent and costs $0.
+#
+# HOW IT WORKS:
+#   - The web service runs Express + Socket.IO and serves the built React app
+#     (client/dist) from the same origin, so no VITE_* build vars are needed.
+#   - SEED_ON_START=true seeds only when the users table is empty and then
+#     auto-creates the administrator (ADMIN_EMAIL / ADMIN_PASSWORD).
+#
+# COST: $0/month (Hobby workspace + 1 free web service).
+#
+# LIMITS TO KNOW (free web service):
+#   - Sleeps after 15 min without traffic; takes ~1 min to wake up. Ping it
+#     from a free uptime monitor every 5 min (e.g. https://uptimerobot.com
+#     → https://www.uptimerobot.com, hit /api/health) to keep it warm.
+#     One always-on service uses ~720–744 of your 750 free hours per month.
+#   - The instance filesystem is ephemeral: uploads (avatars, logos, resumes,
+#     chat attachments) are wiped on every restart/redeploy. Database rows are
+#     safe. For durable files later, add object storage (e.g. Cloudflare R2).
+#   - Outbound SMTP on ports 25/465/587 is blocked; leave SMTP_HOST blank to
+#     log emails, or use a webmail/PaaS SMTP relay on port 2525/8025.
+#
+# SET UP BEFORE FIRST DEPLOY:
+#   1. InfinityFree → MySQL Databases → create a MySQL database.
+#      Note the hostname (e.g. sqlXXX.infinityfree.com), database name,
+#      username and password.
+#   2. In Render, fill DB_HOST / DB_USER / DB_PASSWORD / DB_NAME
+#      (blueprint marks them "manual" below), plus ADMIN_EMAIL / ADMIN_PASSWORD
+#      and (optional) social-login + SMTP keys.
 services:
   - type: web
     name: ojt-connect
@@ -9,25 +42,39 @@ services:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 3001
+        value: "3001"
       - key: DB_MODE
-        value: sqlite
-      - key: DATA_DIR
-        value: /data
-      - key: UPLOADS_DIR
-        value: /data/uploads
+        value: mysql
       - key: SEED_ON_START
         value: "true"
+      # Uploads folder on the (ephemeral) instance filesystem.
+      - key: UPLOADS_DIR
+        value: /tmp/uploads
       - key: JWT_SECRET
         generateValue: true
-      - key: ADMIN_EMAIL
+      # ── InfinityFree MySQL credentials (fill in the Render dashboard) ──
+      - key: DB_HOST
         sync: false
-      - key: ADMIN_PASSWORD
+      - key: DB_PORT
+        value: "3306"
+      - key: DB_USER
         sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        sync: false
+      # ── App URLs. Optional: the server auto-falls-back to Render's
+      #    RENDER_EXTERNAL_URL for social-login callbacks and email links. ──
       - key: SERVER_URL
         sync: false
       - key: CLIENT_URL
         sync: false
+      # Administrator account auto-created at startup (role: admin).
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      # Social sign-in (optional, leave blank to disable).
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -40,14 +87,18 @@ services:
         sync: false
       - key: YAHOO_CLIENT_SECRET
         sync: false
-    # NOTE: Render's free plan does NOT support persistent disks.
-    # Without a disk, SQLite data resets on each redeploy — SEED_ON_START=true
-    # recreates the administrator account automatically, so login always works.
-    # For real persistence: upgrade the instance, or set DB_MODE=mysql and point
-    # at an external MySQL host (e.g. a free InfinityFree MySQL database).
-    # disk:
-    #   name: ojt-data
-    #   mountPath: /data
-    #   sizeGB: 1
+      # Email notifications (optional; free instance cannot use ports 25/465/587).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_FROM_NAME
+        sync: false
     healthCheckPath: /api/health
     autoDeploy: true

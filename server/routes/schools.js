@@ -3,6 +3,7 @@ import { all, get, run, transaction } from '../db.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { isVerified } from './verify.js'
 import { sendInviteEmail } from '../mailer.js'
+import { createNotification } from '../services/notifications.js'
 
 const router = Router()
 
@@ -407,6 +408,16 @@ router.post('/enrollments', requireAuth, requireRole('school'), async (req, res,
     )
     const school = await get('SELECT name FROM schools WHERE id = ?', schoolId)
     await sendInviteEmail({ to: email, studentId, schoolName: school?.name || 'your school' })
+    if (matched?.user_id) {
+      await createNotification({
+        userId: matched.user_id,
+        type: 'school',
+        title: 'School invitation',
+        body: `${school?.name || 'A school'} invited you to their school. Review and accept it.`,
+        link: '/app',
+        io: req.app.get('io')
+      })
+    }
     res.status(201).json({
       enrollment_id: id,
       placed: matched?.user_id ? true : false,
@@ -435,6 +446,7 @@ router.post('/enrollments/place', requireAuth, requireRole('school'), async (req
       if (!e) return res.status(404).json({ error: 'Enrollment not found' })
       await run("UPDATE enrollments SET course_id = ?, room_id = ?, status = 'active', invite_action = '' WHERE id = ?", courseId, roomId, e.id)
       if (e.user_id) await run('UPDATE applicant_profiles SET school_id = ? WHERE user_id = ? AND school_id IS NULL', schoolId, e.user_id)
+      await notifyPlacement(req, schoolId, e.user_id, courseId, roomId)
       return res.json({ ok: true, message: 'Student placed in the selected course/room.' })
     }
     if (userId) {
@@ -445,6 +457,7 @@ router.post('/enrollments/place', requireAuth, requireRole('school'), async (req
       const existing = await get('SELECT id FROM enrollments WHERE user_id = ? AND school_id = ?', userId, schoolId)
       if (existing) {
         await run('UPDATE enrollments SET course_id = ?, room_id = ? WHERE id = ?', courseId, roomId, existing.id)
+        await notifyPlacement(req, schoolId, userId, courseId, roomId)
         return res.json({ ok: true, message: 'Student placed in the selected course/room.' })
       }
       const sid = String(ap.student_id || `SID-${userId}`).trim()
@@ -456,11 +469,29 @@ router.post('/enrollments/place', requireAuth, requireRole('school'), async (req
          VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
         schoolId, courseId, roomId, userId, sid, appRow?.email || '', appRow?.name || ''
       )
+      await notifyPlacement(req, schoolId, userId, courseId, roomId)
       return res.status(201).json({ ok: true, message: 'Student placed in the selected course/room.' })
     }
     return res.status(400).json({ error: 'Missing enrollment or student' })
   } catch (err) { next(err) }
 })
+
+async function notifyPlacement(req, schoolId, userId, courseId, roomId) {
+  if (!userId) return
+  const [school, course, room] = await Promise.all([
+    get('SELECT name FROM schools WHERE id = ?', schoolId),
+    courseId ? get('SELECT name FROM school_courses WHERE id = ?', courseId) : null,
+    roomId ? get('SELECT name FROM school_rooms WHERE id = ?', roomId) : null
+  ])
+  await createNotification({
+    userId,
+    type: 'school',
+    title: 'You are now placed',
+    body: `${school?.name || 'Your school'} placed you in ${[course?.name, room?.name].filter(Boolean).join(' · ')}`,
+    link: '/app',
+    io: req.app.get('io')
+  })
+}
 
 router.delete('/enrollments/:id', requireAuth, requireRole('school'), async (req, res, next) => {
   try {
@@ -523,6 +554,17 @@ router.post('/enrollments/invites/:id/accept', requireAuth, requireRole('applica
     if (!e) return res.status(404).json({ error: 'Invitation not found or already answered' })
     await run("UPDATE enrollments SET invite_action = 'accepted', user_id = ? WHERE id = ?", req.user.id, id)
     await run('UPDATE applicant_profiles SET school_id = ? WHERE user_id = ?', e.school_id, req.user.id)
+    const coords = await all('SELECT user_id FROM school_coordinators WHERE school_id = ?', e.school_id)
+    for (const c of coords) {
+      await createNotification({
+        userId: c.user_id,
+        type: 'school',
+        title: 'Student accepted your invitation',
+        body: `${req.user.name} accepted your school invitation and is ready for placement.`,
+        link: '/school',
+        io: req.app.get('io')
+      })
+    }
     res.json({ ok: true, message: 'Invitation accepted — your school will now place you in a course and room.' })
   } catch (err) { next(err) }
 })
@@ -564,12 +606,23 @@ router.get('/my-placement', requireAuth, requireRole('applicant'), async (req, r
           ap.school_id
         )
       : null
+    const accepted = await all(
+      `SELECT a.id AS application_id, a.updated_at, p.title AS posting_title, p.city,
+              c.company_name, c.logo AS company_logo, c.industry
+       FROM applications a
+       JOIN postings p ON p.id = a.posting_id
+       JOIN company_profiles c ON c.user_id = p.company_id
+       WHERE a.applicant_id = ? AND a.status = 'accepted'
+       ORDER BY a.updated_at DESC`,
+      req.user.id
+    )
     res.json({
       placed: !!enrollment,
       school_id: school?.id || null,
       school_name: school?.name || null,
       student_id: ap?.student_id || '',
-      enrollment
+      enrollment,
+      accepted
     })
   } catch (err) { next(err) }
 })

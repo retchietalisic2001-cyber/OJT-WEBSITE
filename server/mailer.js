@@ -6,6 +6,7 @@ const USER = process.env.SMTP_USER
 const PASS = process.env.SMTP_PASS
 const FROM = process.env.MAIL_FROM || 'no-reply@ojtconnect.com'
 const FROM_NAME = process.env.MAIL_FROM_NAME || 'OJT Connect'
+const CLIENT_URL = process.env.CLIENT_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:5173'
 
 const transport = HOST
   ? nodemailer.createTransport({
@@ -76,7 +77,7 @@ export async function sendInviteEmail({ to, studentId, schoolName, courseName, r
 ${schoolName || 'Your school'} has invited you to track your OJT on OJT Connect.
 
 So we can link your student account:
-• Register or sign in at ${process.env.CLIENT_URL || 'http://localhost:5173'}
+• Register or sign in at ${CLIENT_URL}
 • Enter your Student ID: ${studentId}
 • Use this email: ${to}
 
@@ -120,7 +121,7 @@ IMPORTANT:
 • This is a temporary password. For your security, you will be required to change it the first time you sign in.
 • Keep these credentials private — never share your password.
 
-Sign in here: ${process.env.CLIENT_URL || 'http://localhost:5173'}/login
+Sign in here: ${CLIENT_URL}/login
 
 Thank you,
 The OJT Connect Team`

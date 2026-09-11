@@ -8,8 +8,8 @@ import { signToken } from '../middleware/auth.js'
 
 const router = Router()
 
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3001'
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173'
+const SERVER_URL = process.env.SERVER_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:3001'
+const CLIENT_URL = process.env.CLIENT_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:5173'
 
 const scope = (s) => String(s || '')
 

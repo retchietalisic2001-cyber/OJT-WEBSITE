@@ -25,7 +25,16 @@ let db
 
 if (DB_MODE === 'mysql') {
   const mysql = await import('mysql2/promise')
-  db = await mysql.createPool({ ...DB_CONFIG, dateStrings: true })
+  db = await mysql.createPool({
+    ...DB_CONFIG,
+    dateStrings: true,
+    connectionLimit: 5,
+    waitForConnections: true,
+    connectTimeout: 15000,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0,
+    charset: 'utf8mb4'
+  })
   console.log(`\n  [db] MySQL connected → ${DB_CONFIG.host}:${DB_CONFIG.port}/${DB_CONFIG.database}\n`)
 } else {
   const { DatabaseSync } = await import('node:sqlite')
@@ -143,7 +152,7 @@ CREATE TABLE IF NOT EXISTS applications (
   applicant_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   cover_message TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'submitted'
-    CHECK (status IN ('submitted','under_review','interview','accepted','rejected','withdrawn')),
+    CHECK (status IN ('submitted','under_review','interview','accepted','rejected','withdrawn','completed')),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -153,6 +162,9 @@ CREATE TABLE IF NOT EXISTS status_history (
   application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
   status TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
+  interview_date TEXT NOT NULL DEFAULT '',
+  interview_time TEXT NOT NULL DEFAULT '',
+  interview_link TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -233,6 +245,18 @@ CREATE INDEX IF NOT EXISTS idx_applications_posting ON applications(posting_id);
 CREATE INDEX IF NOT EXISTS idx_messages_application ON messages(application_id);
 CREATE INDEX IF NOT EXISTS idx_hist_application ON status_history(application_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username ON users(username);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL DEFAULT 'general',
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  link TEXT NOT NULL DEFAULT '',
+  is_read INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 `
 
 export async function initSchema() {
@@ -347,7 +371,7 @@ export async function initSchema() {
         posting_id INT NOT NULL,
         applicant_id INT NOT NULL,
         cover_message TEXT,
-        status ENUM('submitted','under_review','interview','accepted','rejected','withdrawn') NOT NULL DEFAULT 'submitted',
+        status ENUM('submitted','under_review','interview','accepted','rejected','withdrawn','completed') NOT NULL DEFAULT 'submitted',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_a_posting FOREIGN KEY (posting_id) REFERENCES postings(id) ON DELETE CASCADE,
@@ -358,6 +382,9 @@ export async function initSchema() {
         application_id INT NOT NULL,
         status VARCHAR(50) NOT NULL,
         note TEXT,
+        interview_date DATE NULL,
+        interview_time TIME NULL,
+        interview_link VARCHAR(500) NOT NULL DEFAULT '',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT fk_sh_app FOREIGN KEY (application_id) REFERENCES applications(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -438,6 +465,17 @@ export async function initSchema() {
       `CREATE INDEX idx_applications_posting ON applications(posting_id)`,
       `CREATE INDEX idx_messages_application ON messages(application_id)`,
       `CREATE INDEX idx_hist_application ON status_history(application_id)`,
+      `CREATE TABLE IF NOT EXISTS notifications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        type VARCHAR(50) NOT NULL DEFAULT 'general',
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        body VARCHAR(500) NOT NULL DEFAULT '',
+        link VARCHAR(500) NOT NULL DEFAULT '',
+        is_read TINYINT(1) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_notifications_user (user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       `SET FOREIGN_KEY_CHECKS = 1`
     ]
     for (const sql of statements) {
@@ -539,6 +577,25 @@ async function migrateSchema() {
         throw err
       }
     }
+    const SH_COLUMNS = [
+      ['interview_date', 'DATE NULL'],
+      ['interview_time', 'TIME NULL'],
+      ['interview_link', "VARCHAR(500) NOT NULL DEFAULT ''"]
+    ]
+    for (const [col, def] of SH_COLUMNS) {
+      try {
+        await db.query(`ALTER TABLE status_history ADD COLUMN ${col} ${def}`)
+      } catch (err) {
+        if (err?.code === 'ER_DUP_FIELDNAME') continue
+        throw err
+      }
+    }
+    try {
+      await db.query(`ALTER TABLE applications MODIFY COLUMN status ENUM('submitted','under_review','interview','accepted','rejected','withdrawn','completed') NOT NULL DEFAULT 'submitted'`)
+    } catch (err) {
+      if (err?.code === 'ER_DUP_FIELDNAME') return
+      throw err
+    }
   } else {
     const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name)
     for (const [col, , sqliteDef] of NEW_USER_COLUMNS) {
@@ -620,6 +677,29 @@ const reqCols = db.prepare('PRAGMA table_info(account_requests)').all().map((c) 
     if (!cpCols.includes('logo')) db.exec("ALTER TABLE company_profiles ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
     const schCols = db.prepare('PRAGMA table_info(schools)').all().map((c) => c.name)
     if (!schCols.includes('logo')) db.exec("ALTER TABLE schools ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
+    const shCols = db.prepare('PRAGMA table_info(status_history)').all().map((c) => c.name)
+    if (!shCols.includes('interview_date')) db.exec("ALTER TABLE status_history ADD COLUMN interview_date TEXT NOT NULL DEFAULT ''")
+    if (!shCols.includes('interview_time')) db.exec("ALTER TABLE status_history ADD COLUMN interview_time TEXT NOT NULL DEFAULT ''")
+    if (!shCols.includes('interview_link')) db.exec("ALTER TABLE status_history ADD COLUMN interview_link TEXT NOT NULL DEFAULT ''")
+    const appTable = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'applications'").get() || {}).sql || ''
+    if (appTable && !appTable.includes('completed')) {
+      db.exec('PRAGMA foreign_keys = OFF;')
+      db.exec('ALTER TABLE applications RENAME TO applications_old;')
+      db.exec(`CREATE TABLE applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        posting_id INTEGER NOT NULL REFERENCES postings(id) ON DELETE CASCADE,
+        applicant_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        cover_message TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'submitted'
+          CHECK (status IN ('submitted','under_review','interview','accepted','rejected','withdrawn','completed')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );`)
+      db.exec(`INSERT INTO applications (id, posting_id, applicant_id, cover_message, status, created_at, updated_at)
+        SELECT id, posting_id, applicant_id, cover_message, status, created_at, updated_at FROM applications_old;`)
+      db.exec('DROP TABLE applications_old;')
+      db.exec('PRAGMA foreign_keys = ON;')
+    }
 
   }
   if (DB_MODE === 'mysql') {
@@ -703,6 +783,7 @@ export const APPLICATION_STATUSES = [
   'under_review',
   'interview',
   'accepted',
+  'completed',
   'rejected',
   'withdrawn'
 ]
@@ -712,6 +793,7 @@ export const STATUS_META = {
   under_review: { label: 'Under Review', color: '#2F80ED' },
   interview: { label: 'Interview', color: '#F0A03C' },
   accepted: { label: 'Accepted', color: '#2FA86B' },
+  completed: { label: 'Completed', color: '#0EA5A4' },
   rejected: { label: 'Rejected', color: '#E5484D' },
   withdrawn: { label: 'Withdrawn', color: '#8A8FA3' }
 }
